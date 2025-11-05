@@ -52,5 +52,28 @@ async def reserve(ctx, name: str, time: str):
         await ctx.send(f"❌ エラーが発生しました: {e}")
         print(e)
 
+@bot.command()
+async def list(ctx):
+    """Google Sheets から予約一覧を表示"""
+    sheet = get_sheets_service()
+    result = sheet.values().get(
+        spreadsheetId=SPREADSHEET_ID,
+        range="sheet1"  # 実際のシート名に合わせて変更
+    ).execute()
+
+    values = result.get("values", [])
+
+    if not values:
+        await ctx.send("📭 現在、予約はありません。")
+        return
+
+    msg = "📋 **予約一覧**\n"
+    for row in values:
+        if len(row) >= 3:
+            user, name, time = row
+            msg += f"- {user} さん：{name}（{time}）\n"
+
+    await ctx.send(msg)
+
 # --- 起動 ---
 bot.run(TOKEN)
