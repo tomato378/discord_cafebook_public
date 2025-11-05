@@ -1,0 +1,21 @@
+.env
+credentials.json
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+venv/
+.venv/
+.env/
+.idea/
+.vscode/
+.DS_Store
+
+# OS / Editor
+Thumbs.db
+*.log
+
+# Replit / Misc
+.replit
