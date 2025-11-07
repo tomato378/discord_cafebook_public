@@ -28,37 +28,41 @@ def get_sheets_service():
 
 # --- モーダル定義 ---
 class ReservationModal(ui.Modal, title="☕ 予約情報を入力してください"):
-    def __init__(self, menu_name: str):
+    def __init__(self, channel_name: str):
         super().__init__()
-        self.menu_name = menu_name
+        self.channel_name = channel_name
 
         self.user_name = ui.TextInput(label="予約者名", placeholder="キャンセルの際に必要です")
+        self.day = ui.TextInput(label="予約日", default="2025/11/01", placeholder="例: 2025/11/01")
         self.start_time = ui.TextInput(label="開始時間", placeholder="例: 13:00(半角)")
         self.end_time = ui.TextInput(label="終了時間", placeholder="例: 14:00( 半角)")
 
         self.add_item(self.user_name)
         self.add_item(self.start_time)
         self.add_item(self.end_time)
+        self.add_item(self.day)
 
     async def on_submit(self, interaction: discord.Interaction):
         sheet = get_sheets_service()
         values = [[
             self.user_name.value,
-            self.menu_name,
+            self.channel_name,
+            self.day.value,
             self.start_time.value,
             self.end_time.value
         ]]
 
+
         try:
             sheet.values().append(
                 spreadsheetId=SPREADSHEET_ID,
-                range="sheet1!A:C",
+                range="sheet1!A:E",
                 valueInputOption="USER_ENTERED",
                 body={"values": values}
             ).execute()
             await interaction.response.send_message(
                 f"✅ {self.user_name.value} さんの予約を登録しました！\n"
-                f"🧾 メニュー：{self.menu_name}\n"
+                f"🧾 {self.channel_name}チャンネル\n"
                 f"🕒 時間：{self.start_time.value}~{self.end_time.value}",
                 ephemeral=True
             )
@@ -86,8 +90,8 @@ class MenuSelect(ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction):
-        menu_name = self.values[0]
-        modal = ReservationModal(menu_name)
+        channel_name = self.values[0]
+        modal = ReservationModal(channel_name)
         await interaction.response.send_modal(modal)
 
 # --- View定義 ---
