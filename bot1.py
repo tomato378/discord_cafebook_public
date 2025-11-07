@@ -32,15 +32,22 @@ class ReservationModal(ui.Modal, title="☕ 予約情報を入力してくださ
         super().__init__()
         self.menu_name = menu_name
 
-        self.user_name = ui.TextInput(label="予約者名", placeholder="例: トマト")
-        self.time = ui.TextInput(label="予約時間", placeholder="例: 13:00")
+        self.user_name = ui.TextInput(label="予約者名", placeholder="キャンセルの際に必要です")
+        self.start_time = ui.TextInput(label="開始時間", placeholder="例: 13:00(半角)")
+        self.end_time = ui.TextInput(label="終了時間", placeholder="例: 14:00( 半角)")
 
         self.add_item(self.user_name)
-        self.add_item(self.time)
+        self.add_item(self.start_time)
+        self.add_item(self.end_time)
 
     async def on_submit(self, interaction: discord.Interaction):
         sheet = get_sheets_service()
-        values = [[self.user_name.value, self.menu_name, self.time.value]]
+        values = [[
+            self.user_name.value,
+            self.menu_name,
+            self.start_time.value,
+            self.end_time.value
+        ]]
 
         try:
             sheet.values().append(
@@ -52,7 +59,7 @@ class ReservationModal(ui.Modal, title="☕ 予約情報を入力してくださ
             await interaction.response.send_message(
                 f"✅ {self.user_name.value} さんの予約を登録しました！\n"
                 f"🧾 メニュー：{self.menu_name}\n"
-                f"🕒 時間：{self.time.value}",
+                f"🕒 時間：{self.start_time.value}~{self.end_time.value}",
                 ephemeral=True
             )
         except Exception as e:
@@ -64,10 +71,19 @@ class ReservationModal(ui.Modal, title="☕ 予約情報を入力してくださ
 class MenuSelect(ui.Select):
     def __init__(self, category_channels):
         options = [
-            discord.SelectOption(label=ch.name, description=f"{ch.name} を予約")
-            for ch in category_channels if isinstance(ch, discord.TextChannel)
+            discord.SelectOption(
+                label=ch.name,
+                description=f"{'ボイスチャンネル' if isinstance(ch, discord.VoiceChannel) else 'テキストチャンネル'} を予約"
+            )
+            for ch in category_channels
+            if isinstance(ch, (discord.TextChannel, discord.VoiceChannel))
         ]
-        super().__init__(placeholder="メニューを選択してください ☕", options=options, min_values=1, max_values=1)
+        super().__init__(
+            placeholder="チャンネルを選択してください ☕",
+            options=options,
+            min_values=1,
+            max_values=1
+        )
 
     async def callback(self, interaction: discord.Interaction):
         menu_name = self.values[0]
@@ -87,7 +103,7 @@ async def reserve_form(interaction: discord.Interaction):
 
     
     if not category:
-        await interaction.response.send_message("❌ 『カフェメニュー』カテゴリーが見つかりません。", ephemeral=True)
+        await interaction.response.send_message("❌ 『カフェ』カテゴリーが見つかりません。", ephemeral=True)
         return
 
     view = MenuSelectView(category.channels)
