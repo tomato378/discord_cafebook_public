@@ -140,7 +140,7 @@ class ReservationModal(ui.Modal, title="☕ 予約情報を入力してくださ
                 valueInputOption="USER_ENTERED",
                 body={"values": values}
             ).execute()
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"✅ {self.user_name.value} さんの予約を登録しました！\n"
                 f"🧾 {self.channel_name} チャンネル\n"
                 f"📅 {self.day.value}\n"
@@ -148,7 +148,7 @@ class ReservationModal(ui.Modal, title="☕ 予約情報を入力してくださ
                 ephemeral=True
             )
         except Exception as e:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"❌ エラーが発生しました: {e}", ephemeral=True
             )
 
