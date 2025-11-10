@@ -38,39 +38,115 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="/", intents=intents)
 
-# --- Google Sheets 接続 ---
-def get_sheets_service():
-    creds = service_account.Credentials.from_service_account_file(
-        CREDENTIALS_PATH,
-        scopes=["https://www.googleapis.com/auth/spreadsheets"]
-    )
-    service = build("sheets", "v4", credentials=creds)
-    return service.spreadsheets()
+# --- ユーティリティ関数 ---
+def format_reservation_message(reservation: dict, prefix: str = "") -> str:
+    """予約情報を表示用の文字列にフォーマット"""
+    return (
+        f"{prefix}\n"
+        f"👤 予約者：{reservation['user']}\n"
+        f"📅 予約日：{reservation['day']}\n"
+        f"🏠 場所：{reservation['channel']}\n"
+        f"🕒 時間：{reservation['start']}〜{reservation['end']}"
+    ).strip()
 
-SHEET_NAME = "sheet1"
+def create_reservation_dict(row: list, row_index: int) -> dict:
+    """スプレッドシートの行から予約情報の辞書を作成"""
+    return {
+        "row_index": row_index,
+        "user": row[0],
+        "channel": row[1],
+        "day": row[2],
+        "start": row[3],
+        "end": row[4]
+    }
 
-sheet = get_sheets_service()
+# --- Google Sheets 操作 ---
+class SheetOperations:
+    def __init__(self):
+        self.service = None
+        self.sheet_name = "sheet1"
+        self.header = ["ユーザー名", "メニュー名", "日付", "開始", "終了"]
 
-# 読み込み
-result = sheet.values().get(
-    spreadsheetId=SPREADSHEET_ID,
-    range=f"{SHEET_NAME}!A:E"
-).execute()
+    def get_service(self):
+        """Sheets APIサービスを取得（初回のみ初期化）"""
+        if not self.service:
+            creds = service_account.Credentials.from_service_account_file(
+                CREDENTIALS_PATH,
+                scopes=["https://www.googleapis.com/auth/spreadsheets"]
+            )
+            self.service = build("sheets", "v4", credentials=creds).spreadsheets()
+        return self.service
 
-sheetvalues = result.get("values", [])
+    def get_values(self) -> list:
+        """シートの全データを取得"""
+        service = self.get_service()
+        result = service.values().get(
+            spreadsheetId=SPREADSHEET_ID,
+            range=f"{self.sheet_name}!A:E"
+        ).execute()
+        return result.get("values", [])
 
-# データが空の場合のみヘッダーを書き込む
-if not sheetvalues:
-    header = [["ユーザー名", "メニュー名", "日付", "開始", "終了"]]
-    sheet.values().append(
-        spreadsheetId=SPREADSHEET_ID,
-        range=f"{SHEET_NAME}!A:E",
-        valueInputOption="USER_ENTERED",
-        body={"values": header}
-    ).execute()
+    def append_row(self, values: list) -> None:
+        """新しい行を追加"""
+        service = self.get_service()
+        service.values().append(
+            spreadsheetId=SPREADSHEET_ID,
+            range=f"{self.sheet_name}!A:E",
+            valueInputOption="USER_ENTERED",
+            body={"values": [values]}
+        ).execute()
+
+    def delete_row(self, row_index: int) -> None:
+        """指定行を削除"""
+        service = build("sheets", "v4", credentials=service_account.Credentials.from_service_account_file(
+            CREDENTIALS_PATH,
+            scopes=["https://www.googleapis.com/auth/spreadsheets"]
+        ))
+        body = {
+            "requests": [{
+                "deleteDimension": {
+                    "range": {
+                        "sheetId": 0,
+                        "dimension": "ROWS",
+                        "startIndex": row_index,
+                        "endIndex": row_index + 1
+                    }
+                }
+            }]
+        }
+        service.spreadsheets().batchUpdate(spreadsheetId=SPREADSHEET_ID, body=body).execute()
+
+    def find_reservations(self, user: str = None, day: str = None, channel: str = None) -> list:
+        """条件に一致する予約を検索"""
+        rows = self.get_values()
+        if not rows:
+            return []
+
+        # ヘッダー行が無い場合は追加
+        if rows[0] != self.header:
+            self.append_row(self.header)
+            return []
+
+        matches = []
+        for i, row in enumerate(rows[1:], 1):  # ヘッダーをスキップしてインデックスは1から
+            if len(row) < 5:
+                continue
+            
+            if user and row[0] != user:
+                continue
+            if day and row[2] != day:
+                continue
+            if channel and row[1] != channel:
+                continue
+                
+            matches.append(create_reservation_dict(row, i))
+        
+        return matches
+
+sheets = SheetOperations()
 
 
-# --- モーダル定義（重複チェック追加） ---
+# --- モーダル定義（予約用） ---
 class ReservationModal(ui.Modal, title="☕ 予約情報を入力してください"):
     def __init__(self, channel_name: str):
         super().__init__()
@@ -87,29 +163,21 @@ class ReservationModal(ui.Modal, title="☕ 予約情報を入力してくださ
         self.add_item(self.end_time)
 
     # --- 重複チェック（開始〜終了時間範囲） ---
-    def is_slot_available(self, day, start_time_str, end_time_str):
-        sheet = get_sheets_service()
-        result = sheet.values().get(
-            spreadsheetId=SPREADSHEET_ID,
-            range=f"{SHEET_NAME}!A:E"
-        ).execute()
-        rows = result.get("values", [])
-
+    def is_slot_available(self, day: str, start_time_str: str, end_time_str: str) -> bool:
+        """指定した時間枠が予約可能か確認"""
         new_start = datetime.strptime(start_time_str, "%H:%M").time()
         new_end = datetime.strptime(end_time_str, "%H:%M").time()
 
-        for row in rows:
-            if len(row) >= 5:
-                _, channel, r_day, r_start_str, r_end_str = row
-                if channel != self.channel_name or r_day != day:
-                    continue
+        # チャンネルと日付で予約を検索
+        existing = sheets.find_reservations(day=day, channel=self.channel_name)
+        
+        for reservation in existing:
+            r_start = datetime.strptime(reservation["start"], "%H:%M").time()
+            r_end = datetime.strptime(reservation["end"], "%H:%M").time()
 
-                r_start = datetime.strptime(r_start_str, "%H:%M").time()
-                r_end = datetime.strptime(r_end_str, "%H:%M").time()
-
-                # 重複判定：範囲が少しでも重なる場合は False
-                if (new_start < r_end) and (new_end > r_start):
-                    return False
+            # 重複判定：範囲が少しでも重なる場合は False
+            if (new_start < r_end) and (new_end > r_start):
+                return False
         return True
 
     async def on_submit(self, interaction: discord.Interaction):
@@ -124,27 +192,25 @@ class ReservationModal(ui.Modal, title="☕ 予約情報を入力してくださ
             return
 
         # 重複なしなら登録
-        sheet = get_sheets_service()
-        values = [[
-            self.user_name.value,
-            self.channel_name,
-            self.day.value,
-            self.start_time.value,
-            self.end_time.value
-        ]]
-
         try:
-            sheet.values().append(
-                spreadsheetId=SPREADSHEET_ID,
-                range=f"{SHEET_NAME}!A:E",
-                valueInputOption="USER_ENTERED",
-                body={"values": values}
-            ).execute()
+            sheets.append_row([
+                self.user_name.value,
+                self.channel_name,
+                self.day.value,
+                self.start_time.value,
+                self.end_time.value
+            ])
+
+            # 登録した予約情報を表示用にフォーマット
+            reservation = {
+                "user": self.user_name.value,
+                "channel": self.channel_name,
+                "day": self.day.value,
+                "start": self.start_time.value,
+                "end": self.end_time.value
+            }
             await interaction.followup.send(
-                f"✅ {self.user_name.value} さんの予約を登録しました！\n"
-                f"🧾 {self.channel_name} チャンネル\n"
-                f"📅 {self.day.value}\n"
-                f"🕒 {self.start_time.value}〜{self.end_time.value}",
+                format_reservation_message(reservation, prefix="✅ 予約を登録しました！"),
                 ephemeral=True
             )
         except Exception as e:
@@ -152,19 +218,74 @@ class ReservationModal(ui.Modal, title="☕ 予約情報を入力してくださ
                 f"❌ エラーが発生しました: {e}", ephemeral=True
             )
 
+# --- モーダル定義（キャンセル用） ---
+class CancelReservationModal(ui.Modal, title="☕ キャンセルしたい予約情報を入力してください"):
+    def __init__(self, channel_name: str):
+        super().__init__()
+        self.channel_name = channel_name
+
+        self.user_name = ui.TextInput(label="予約者名", placeholder="キャンセルの際に必要です")
+        self.day = ui.TextInput(label="予約日", default="2025/11/01", placeholder="例: 2025/11/01")
+        self.start_time = ui.TextInput(label="開始時間", placeholder="例: 13:00(半角)")
+        self.end_time = ui.TextInput(label="終了時間", placeholder="例: 14:00(半角)")
+
+        self.add_item(self.user_name)
+        self.add_item(self.day)
+        self.add_item(self.start_time)
+        self.add_item(self.end_time)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+
+        # 条件に一致する予約を探す
+        matches = sheets.find_reservations(
+            user=self.user_name.value,
+            day=self.day.value,
+            channel=self.channel_name
+        )
+
+        # 開始時間と終了時間で絞り込み
+        matches = [
+            r for r in matches
+            if r["start"] == self.start_time.value and r["end"] == self.end_time.value
+        ]
+
+        if not matches:
+            await interaction.followup.send(
+                "❌ 入力された予約情報は見つかりませんでした。",
+                ephemeral=True
+            )
+            return
+
+        # 最初に見つかった予約をキャンセル
+        reservation = matches[0]
+        try:
+            sheets.delete_row(reservation["row_index"])
+            await interaction.followup.send(
+                format_reservation_message(reservation, prefix="✅ 予約をキャンセルしました！"),
+                ephemeral=True
+            )
+        except Exception as e:
+            await interaction.followup.send(
+                f"❌ キャンセル中にエラーが発生しました: {e}",
+                ephemeral=True
+            )
+
 # --- プルダウンメニュー定義 ---
 class MenuSelect(ui.Select):
-    def __init__(self, category_channels):
+    def __init__(self, category_channels, is_cancel=False):
+        self.is_cancel = is_cancel
+        action = "キャンセル" if is_cancel else "予約"
         options = [
             discord.SelectOption(
                 label=ch.name,
-                description=f"{'ボイスチャンネル' if isinstance(ch, discord.VoiceChannel) else 'テキストチャンネル'} を予約"
+                description=f"{'ボイスチャンネル' if isinstance(ch, discord.VoiceChannel) else 'テキストチャンネル'} を{action}"
             )
             for ch in category_channels
             if isinstance(ch, (discord.TextChannel, discord.VoiceChannel))
         ]
         super().__init__(
-            placeholder="チャンネルを選択してください ☕",
+            placeholder=f"チャンネルを選択してください ☕",
             options=options,
             min_values=1,
             max_values=1
@@ -172,14 +293,14 @@ class MenuSelect(ui.Select):
 
     async def callback(self, interaction: discord.Interaction):
         channel_name = self.values[0]
-        modal = ReservationModal(channel_name)
+        modal = CancelReservationModal(channel_name) if self.is_cancel else ReservationModal(channel_name)
         await interaction.response.send_modal(modal)
 
 # --- View定義 ---
 class MenuSelectView(ui.View):
-    def __init__(self, category_channels):
+    def __init__(self, category_channels, is_cancel=False):
         super().__init__(timeout=60)
-        self.add_item(MenuSelect(category_channels))
+        self.add_item(MenuSelect(category_channels, is_cancel))
 
 # --- 予約フォームコマンド ---
 @bot.tree.command(name="reserve_form", description="ポップアップで予約を登録します")
@@ -198,31 +319,36 @@ async def reserve_form(interaction: discord.Interaction):
 async def reserve_list(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
 
-    sheet = get_sheets_service()
-    result = sheet.values().get(
-        spreadsheetId=SPREADSHEET_ID,
-        range=f"{SHEET_NAME}!A:E"
-    ).execute()
+    reservations = sheets.find_reservations()  # 全予約を取得
 
-
-    values = result.get("values", [])[1:]  # ヘッダー行を除外
-
-    if not values:
+    if not reservations:
         await interaction.followup.send("📭 現在、予約はありません。", ephemeral=True)
         return
 
     embed = discord.Embed(title="☕ 予約一覧（最新10件）", color=discord.Color.green())
 
-    for row in values[-10:]:
-        if len(row) >= 5:
-            user, channel, day, start, end = row
-            embed.add_field(
-                name=f"📅 {day} | {channel}",
-                value=f"👤 {user}\n🕒 {start}〜{end}",
-                inline=False
-            )
+    # 最新の10件を表示
+    for reservation in reservations[-10:]:
+        embed.add_field(
+            name=f"📅 {reservation['day']} | {reservation['channel']}",
+            value=f"👤 {reservation['user']}\n🕒 {reservation['start']}〜{reservation['end']}",
+            inline=False
+        )
 
     await interaction.followup.send(embed=embed, ephemeral=True)
+
+# --- 予約キャンセルコマンド ---
+@bot.tree.command(name="reserve_cancel", description="予約をキャンセルします")
+async def reserve_cancel(interaction: discord.Interaction):
+    category = discord.utils.get(interaction.guild.categories, name="カフェ")
+    
+    if not category:
+        await interaction.response.send_message("❌ 『カフェ』カテゴリーが見つかりません。", ephemeral=True)
+        return
+
+    # チャンネル選択ビューを表示
+    view = MenuSelectView(category.channels, is_cancel=True)
+    await interaction.response.send_message("☕ メニューを選んでください：", view=view, ephemeral=True)
 
 # --- Bot起動 ---
 @bot.event
