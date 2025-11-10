@@ -12,6 +12,7 @@ load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 SPREADSHEET_ID = os.getenv("GOOGLE_SHEET_ID")
 CREDENTIALS_PATH = os.getenv("GOOGLE_CREDENTIALS_PATH")
+CAFE_CATEGORY_ID = int(os.getenv("CAFE_CATEGORY_ID", "0"))  # カフェカテゴリのID
 # --- GUILD ID の読み取り（テスト時は .env に GUILD_ID を入れてください） ---
 GUILD_ID_ENV = os.getenv("GUILD_ID")
 if GUILD_ID_ENV:
@@ -305,10 +306,14 @@ class MenuSelectView(ui.View):
 # --- 予約フォームコマンド ---
 @bot.tree.command(name="reserve_form", description="ポップアップで予約を登録します")
 async def reserve_form(interaction: discord.Interaction):
-    category = discord.utils.get(interaction.guild.categories, name="カフェ")
+    category = interaction.guild.get_channel(CAFE_CATEGORY_ID)
 
-    if not category:
-        await interaction.response.send_message("❌ 『カフェ』カテゴリーが見つかりません。", ephemeral=True)
+    if not category or not isinstance(category, discord.CategoryChannel):
+        await interaction.response.send_message(
+            f"❌ カテゴリーが見つかりません。(ID: {CAFE_CATEGORY_ID})\n"
+            f"管理者に確認してください。",
+            ephemeral=True
+        )
         return
 
     view = MenuSelectView(category.channels)
@@ -340,10 +345,14 @@ async def reserve_list(interaction: discord.Interaction):
 # --- 予約キャンセルコマンド ---
 @bot.tree.command(name="reserve_cancel", description="予約をキャンセルします")
 async def reserve_cancel(interaction: discord.Interaction):
-    category = discord.utils.get(interaction.guild.categories, name="カフェ")
+    category = interaction.guild.get_channel(CAFE_CATEGORY_ID)
     
-    if not category:
-        await interaction.response.send_message("❌ 『カフェ』カテゴリーが見つかりません。", ephemeral=True)
+    if not category or not isinstance(category, discord.CategoryChannel):
+        await interaction.response.send_message(
+            f"❌ カテゴリーが見つかりません。(ID: {CAFE_CATEGORY_ID})\n"
+            f"管理者に確認してください。",
+            ephemeral=True
+        )
         return
 
     # チャンネル選択ビューを表示
