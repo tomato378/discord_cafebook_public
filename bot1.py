@@ -88,11 +88,7 @@ class SheetOperations:
     def get_service(self):
         """Sheets APIサービスを取得（初回のみ初期化）"""
         if not self.service:
-            creds = service_account.Credentials.from_service_account_file(
-                CREDENTIALS_PATH,
-                scopes=["https://www.googleapis.com/auth/spreadsheets"]
-            )
-            self.service = build("sheets", "v4", credentials=creds).spreadsheets()
+            self.service = build("sheets", "v4", credentials=credentials).spreadsheets()
         return self.service
 
     def get_values(self) -> list:
@@ -116,10 +112,8 @@ class SheetOperations:
 
     def delete_row(self, row_index: int) -> None:
         """指定行を削除"""
-        service = build("sheets", "v4", credentials=service_account.Credentials.from_service_account_file(
-            CREDENTIALS_PATH,
-            scopes=["https://www.googleapis.com/auth/spreadsheets"]
-        ))
+        # ここも get_service() を使う方が自然
+        service = build("sheets", "v4", credentials=credentials)
         body = {
             "requests": [{
                 "deleteDimension": {
@@ -132,7 +126,10 @@ class SheetOperations:
                 }
             }]
         }
-        service.spreadsheets().batchUpdate(spreadsheetId=SPREADSHEET_ID, body=body).execute()
+        service.spreadsheets().batchUpdate(
+            spreadsheetId=SPREADSHEET_ID,
+            body=body
+        ).execute()
 
     def find_reservations(self, user: str = None, day: str = None, channel: str = None) -> list:
         """条件に一致する予約を検索"""
@@ -140,27 +137,28 @@ class SheetOperations:
         if not rows:
             return []
 
-        # ヘッダー行が無い場合は追加
+        # ヘッダー行を見て整形
         if rows[0] != self.header:
             self.append_row(self.header)
             return []
 
         matches = []
-        for i, row in enumerate(rows[1:], 1):  # ヘッダーをスキップしてインデックスは1から
+        for i, row in enumerate(rows[1:], 1):
             if len(row) < 5:
                 continue
-            
             if user and row[0] != user:
                 continue
             if day and row[2] != day:
                 continue
             if channel and row[1] != channel:
                 continue
-                
+
             matches.append(create_reservation_dict(row, i))
-        
+
         return matches
 
+
+# 最後にインスタンス化
 sheets = SheetOperations()
 
 
