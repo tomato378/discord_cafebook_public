@@ -1,5 +1,4 @@
 import os
-import json
 import discord
 from discord.ext import commands
 from discord import app_commands, ui
@@ -12,26 +11,10 @@ from datetime import datetime
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 SPREADSHEET_ID = os.getenv("GOOGLE_SHEET_ID")
-CAFE_CATEGORY_ID = int(os.getenv("CAFE_CATEGORY_ID", "0"))  # カフェカテゴリのID
-
-# --- Google認証情報切り替え ---
-USE_RAILWAY = os.getenv("RAILWAY", "false").lower() == "true"
-
-if USE_RAILWAY:
-    # Railwayの場合は環境変数にJSONを入れる
-    CREDENTIALS_JSON = os.getenv("GOOGLE_CREDENTIALS_JSON")
-    if not CREDENTIALS_JSON:
-        raise RuntimeError("RAILWAY=true ですが、GOOGLE_CREDENTIALS_JSON が設定されていません。")
-    credentials = service_account.Credentials.from_service_account_info(json.loads(CREDENTIALS_JSON))
-else:
-    # ローカルの場合はファイルパスを使う
-    CREDENTIALS_PATH = os.getenv("GOOGLE_CREDENTIALS_PATH")
-    if not CREDENTIALS_PATH or not os.path.exists(CREDENTIALS_PATH):
-        raise RuntimeError("RAILWAY=false ですが、CREDENTIALS_PATH が存在しません。")
-    credentials = service_account.Credentials.from_service_account_file(CREDENTIALS_PATH)
-
+CREDENTIALS_PATH = os.getenv("GOOGLE_CREDENTIALS_PATH")
+CAFE_CATEGORY_ID = int(os.getenv("CAFE_CATEGORY_ID_TEST", "0"))  # カフェカテゴリのID
 # --- GUILD ID の読み取り（テスト時は .env に GUILD_ID を入れてください） ---
-GUILD_ID_ENV = os.getenv("GUILD_ID")  # テスト用ギルドID
+GUILD_ID_ENV = os.getenv("GUILD_ID_TEST")
 if GUILD_ID_ENV:
     try:
         GUILD_ID = int(GUILD_ID_ENV)
@@ -88,7 +71,11 @@ class SheetOperations:
     def get_service(self):
         """Sheets APIサービスを取得（初回のみ初期化）"""
         if not self.service:
-            self.service = build("sheets", "v4", credentials=credentials).spreadsheets()
+            creds = service_account.Credentials.from_service_account_file(
+                CREDENTIALS_PATH,
+                scopes=["https://www.googleapis.com/auth/spreadsheets"]
+            )
+            self.service = build("sheets", "v4", credentials=creds).spreadsheets()
         return self.service
 
     def get_values(self) -> list:
@@ -112,8 +99,10 @@ class SheetOperations:
 
     def delete_row(self, row_index: int) -> None:
         """指定行を削除"""
-        # ここも get_service() を使う方が自然
-        service = build("sheets", "v4", credentials=credentials)
+        service = build("sheets", "v4", credentials=service_account.Credentials.from_service_account_file(
+            CREDENTIALS_PATH,
+            scopes=["https://www.googleapis.com/auth/spreadsheets"]
+        ))
         body = {
             "requests": [{
                 "deleteDimension": {
@@ -126,10 +115,7 @@ class SheetOperations:
                 }
             }]
         }
-        service.spreadsheets().batchUpdate(
-            spreadsheetId=SPREADSHEET_ID,
-            body=body
-        ).execute()
+        service.spreadsheets().batchUpdate(spreadsheetId=SPREADSHEET_ID, body=body).execute()
 
     def find_reservations(self, user: str = None, day: str = None, channel: str = None) -> list:
         """条件に一致する予約を検索"""
@@ -137,28 +123,27 @@ class SheetOperations:
         if not rows:
             return []
 
-        # ヘッダー行を見て整形
+        # ヘッダー行が無い場合は追加
         if rows[0] != self.header:
             self.append_row(self.header)
             return []
 
         matches = []
-        for i, row in enumerate(rows[1:], 1):
+        for i, row in enumerate(rows[1:], 1):  # ヘッダーをスキップしてインデックスは1から
             if len(row) < 5:
                 continue
+            
             if user and row[0] != user:
                 continue
             if day and row[2] != day:
                 continue
             if channel and row[1] != channel:
                 continue
-
+                
             matches.append(create_reservation_dict(row, i))
-
+        
         return matches
 
-
-# 最後にインスタンス化
 sheets = SheetOperations()
 
 
@@ -168,10 +153,10 @@ class ReservationModal(ui.Modal, title="☕ 予約情報を入力してくださ
         super().__init__()
         self.channel_name = channel_name
 
-        self.user_name = ui.TextInput(label="予約者名", placeholder="キャンセルの際に必要です。")
+        self.user_name = ui.TextInput(label="予約者名", placeholder="キャンセルの際に必要です")
         self.day = ui.TextInput(label="予約日", default="2025/11/01", placeholder="例: 2025/11/01")
-        self.start_time = ui.TextInput(label="開始時間", default="13:00", placeholder="例: 13:00(半角)")
-        self.end_time = ui.TextInput(label="終了時間", default="14:00", placeholder="例: 14:00(半角)")
+        self.start_time = ui.TextInput(label="開始時間", placeholder="例: 13:00(半角)")
+        self.end_time = ui.TextInput(label="終了時間", placeholder="例: 14:00(半角)")
 
         self.add_item(self.user_name)
         self.add_item(self.day)
@@ -197,7 +182,7 @@ class ReservationModal(ui.Modal, title="☕ 予約情報を入力してくださ
         return True
 
     async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=False)
+        await interaction.response.defer(ephemeral=True)
         # 時間範囲重複チェック
         if not self.is_slot_available(self.day.value, self.start_time.value, self.end_time.value):
             await interaction.followup.send(
@@ -227,7 +212,7 @@ class ReservationModal(ui.Modal, title="☕ 予約情報を入力してくださ
             }
             await interaction.followup.send(
                 format_reservation_message(reservation, prefix="✅ 予約を登録しました！"),
-                ephemeral=False
+                ephemeral=True
             )
         except Exception as e:
             await interaction.followup.send(
@@ -251,7 +236,7 @@ class CancelReservationModal(ui.Modal, title="☕ キャンセルしたい予約
         self.add_item(self.end_time)
 
     async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=False)
+        await interaction.response.defer(ephemeral=True)
 
         # 条件に一致する予約を探す
         matches = sheets.find_reservations(
@@ -279,7 +264,7 @@ class CancelReservationModal(ui.Modal, title="☕ キャンセルしたい予約
             sheets.delete_row(reservation["row_index"])
             await interaction.followup.send(
                 format_reservation_message(reservation, prefix="✅ 予約をキャンセルしました！"),
-                ephemeral=False
+                ephemeral=True
             )
         except Exception as e:
             await interaction.followup.send(
@@ -287,19 +272,59 @@ class CancelReservationModal(ui.Modal, title="☕ キャンセルしたい予約
                 ephemeral=True
             )
 
+# --- View定義（予約・キャンセルボタン） ---
+class ReservationMenu(ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        # Category IDを環境変数から直接取得する必要があるため、ここでロードします
+        self.category_id = int(os.getenv("CAFE_CATEGORY_ID_TEST", "0"))
+
+    # 永続化のために custom_id を明示的に付与
+    @ui.button(custom_id="reservation_menu:reserve", label="📝 予約する", style=discord.ButtonStyle.primary)
+    async def reserve_button(self, interaction: discord.Interaction, button: ui.Button):
+        # 修正: MenuSelectView を表示する
+        category = interaction.guild.get_channel(self.category_id)
+        if not category or not isinstance(category, discord.CategoryChannel):
+            await interaction.response.send_message(
+                f"❌ カテゴリーが見つかりません。(ID: {self.category_id})\n",
+                ephemeral=True
+            )
+            return
+
+        view = MenuSelectView(category.channels, is_cancel=False) # is_cancel=Falseで予約用
+        await interaction.response.send_message("☕ 予約するメニューを選んでください：", view=view, ephemeral=True)
+
+
+    @ui.button(custom_id="reservation_menu:cancel", label="❌ キャンセルする", style=discord.ButtonStyle.danger)
+    async def cancel_button(self, interaction: discord.Interaction, button: ui.Button):
+        # 修正: MenuSelectView を表示する
+        category = interaction.guild.get_channel(self.category_id)
+        if not category or not isinstance(category, discord.CategoryChannel):
+            await interaction.response.send_message(
+                f"❌ カテゴリーが見つかりません。(ID: {self.category_id})\n",
+                ephemeral=True
+            )
+            return
+
+        view = MenuSelectView(category.channels, is_cancel=True) # is_cancel=Trueでキャンセル用
+        await interaction.response.send_message("☕ キャンセルするメニューを選んでください：", view=view, ephemeral=True)
+
 # --- プルダウンメニュー定義 ---
 class MenuSelect(ui.Select):
     def __init__(self, category_channels, is_cancel=False):
         self.is_cancel = is_cancel
         action = "キャンセル" if is_cancel else "予約"
-        options = [
-            discord.SelectOption(
-                label=ch.name,
-                description=f"{'ボイスチャンネル' if isinstance(ch, discord.VoiceChannel) else 'テキストチャンネル'} を{action}"
-            )
-            for ch in category_channels
-            if isinstance(ch, (discord.TextChannel, discord.VoiceChannel))
-        ]
+        # Channel list may include categories or other channel types; include any guild channel
+        # except CategoryChannel. Use channel ID as the option value to avoid duplicate name issues.
+        options = []
+        for ch in category_channels:
+            if isinstance(ch, discord.CategoryChannel):
+                continue
+            label = getattr(ch, "name", None)
+            if not label:
+                continue
+            ch_type = "ボイスチャンネル" if isinstance(ch, discord.VoiceChannel) else "テキストチャンネル"
+            options.append(discord.SelectOption(label=label, value=str(ch.id), description=f"{ch_type} を{action}"))
         super().__init__(
             placeholder=f"チャンネルを選択してください ☕",
             options=options,
@@ -308,7 +333,14 @@ class MenuSelect(ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction):
-        channel_name = self.values[0]
+        # value is channel id (string)
+        try:
+            channel_id = int(self.values[0])
+            channel = interaction.guild.get_channel(channel_id)
+            channel_name = channel.name if channel else self.values[0]
+        except Exception:
+            channel_name = self.values[0]
+
         modal = CancelReservationModal(channel_name) if self.is_cancel else ReservationModal(channel_name)
         await interaction.response.send_modal(modal)
 
@@ -332,7 +364,7 @@ async def reserve_form(interaction: discord.Interaction):
         return
 
     view = MenuSelectView(category.channels)
-    await interaction.response.send_message("☕ メニューを選んでください：", view=view, ephemeral=False)
+    await interaction.response.send_message("☕ メニューを選んでください：", view=view, ephemeral=True)
 
 # --- 予約一覧コマンド ---
 @bot.tree.command(name="reserve_list", description="予約一覧を表示します")
@@ -372,7 +404,19 @@ async def reserve_cancel(interaction: discord.Interaction):
 
     # チャンネル選択ビューを表示
     view = MenuSelectView(category.channels, is_cancel=True)
-    await interaction.response.send_message("☕ メニューを選んでください：", view=view, ephemeral=False)
+    await interaction.response.send_message("☕ メニューを選んでください：", view=view, ephemeral=True)
+
+
+# --- デバッグ用 / 表示用コマンド（ボタン付きメニューをチャンネルに表示） ---
+@bot.tree.command(name="show_menu", description="予約/キャンセルボタンを表示します")
+async def show_menu(interaction: discord.Interaction):
+    """このコマンドは現在のチャンネルに `ReservationMenu` ボタンを表示します。
+
+    永続化が必要であれば on_ready() 内で bot.add_view() を呼んでください。
+    """
+    view = ReservationMenu()
+    # 公開メッセージとして表示（ephemeral=False）
+    await interaction.response.send_message("操作を選んでください：", view=view)
 
 # --- Bot起動 ---
 @bot.event
@@ -443,6 +487,12 @@ async def on_ready():
             except Exception:
                 guild_cmds = []
             print(f"🔁 guild commands after sync: {guild_cmds}")
+        # 登録済みの View を追加（永続化用）
+        try:
+            bot.add_view(ReservationMenu())
+            print("🔁 ReservationMenu registered via bot.add_view()")
+        except Exception as e:
+            print(f"⚠️ Failed to register ReservationMenu: {e}")
         else:
             print("⚠️ GUILD_ID が設定されていません。ギルド同期はスキップされます。開発時は .env に GUILD_ID を設定してください。")
 
