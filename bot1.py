@@ -182,7 +182,7 @@ class ReservationModal(ui.Modal, title="☕ 予約情報を入力してくださ
         return True
 
     async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
+        await interaction.response.defer(ephemeral=False)
         # 時間範囲重複チェック
         if not self.is_slot_available(self.day.value, self.start_time.value, self.end_time.value):
             await interaction.followup.send(
@@ -212,7 +212,7 @@ class ReservationModal(ui.Modal, title="☕ 予約情報を入力してくださ
             }
             await interaction.followup.send(
                 format_reservation_message(reservation, prefix="✅ 予約を登録しました！"),
-                ephemeral=True
+                ephemeral=False
             )
         except Exception as e:
             await interaction.followup.send(
@@ -236,7 +236,7 @@ class CancelReservationModal(ui.Modal, title="☕ キャンセルしたい予約
         self.add_item(self.end_time)
 
     async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
+        await interaction.response.defer(ephemeral=False)
 
         # 条件に一致する予約を探す
         matches = sheets.find_reservations(
@@ -264,7 +264,7 @@ class CancelReservationModal(ui.Modal, title="☕ キャンセルしたい予約
             sheets.delete_row(reservation["row_index"])
             await interaction.followup.send(
                 format_reservation_message(reservation, prefix="✅ 予約をキャンセルしました！"),
-                ephemeral=True
+                ephemeral=False
             )
         except Exception as e:
             await interaction.followup.send(
@@ -317,7 +317,7 @@ async def reserve_form(interaction: discord.Interaction):
         return
 
     view = MenuSelectView(category.channels)
-    await interaction.response.send_message("☕ メニューを選んでください：", view=view, ephemeral=True)
+    await interaction.response.send_message("☕ メニューを選んでください：", view=view, ephemeral=False)
 
 # --- 予約一覧コマンド ---
 @bot.tree.command(name="reserve_list", description="予約一覧を表示します")
@@ -357,7 +357,7 @@ async def reserve_cancel(interaction: discord.Interaction):
 
     # チャンネル選択ビューを表示
     view = MenuSelectView(category.channels, is_cancel=True)
-    await interaction.response.send_message("☕ メニューを選んでください：", view=view, ephemeral=True)
+    await interaction.response.send_message("☕ メニューを選んでください：", view=view, ephemeral=False)
 
 # --- Bot起動 ---
 @bot.event
