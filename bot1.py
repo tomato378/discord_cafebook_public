@@ -12,7 +12,7 @@ from datetime import datetime
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 SPREADSHEET_ID = os.getenv("GOOGLE_SHEET_ID")
-CAFE_CATEGORY_ID = int(os.getenv("CAFE_CATEGORY_ID", "0"))  # カフェカテゴリのID
+CAFE_CATEGORY_ID = int(os.getenv("CAFE_CATEGORY_ID_TEST", "0"))  # カフェカテゴリのID
 
 # --- Google認証情報切り替え ---
 USE_RAILWAY = os.getenv("RAILWAY", "false").lower() == "true"
@@ -31,7 +31,7 @@ else:
     credentials = service_account.Credentials.from_service_account_file(CREDENTIALS_PATH)
 
 # --- GUILD ID の読み取り（テスト時は .env に GUILD_ID を入れてください） ---
-GUILD_ID_ENV = os.getenv("GUILD_ID")
+GUILD_ID_ENV = os.getenv("GUILD_ID_TEST")  # テスト用ギルドID
 if GUILD_ID_ENV:
     try:
         GUILD_ID = int(GUILD_ID_ENV)
