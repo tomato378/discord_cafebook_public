@@ -1,4 +1,5 @@
 import os
+import json
 import discord
 from discord.ext import commands
 from discord import app_commands, ui
@@ -11,8 +12,24 @@ from datetime import datetime
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 SPREADSHEET_ID = os.getenv("GOOGLE_SHEET_ID")
-CREDENTIALS_PATH = os.getenv("GOOGLE_CREDENTIALS_PATH")
 CAFE_CATEGORY_ID = int(os.getenv("CAFE_CATEGORY_ID", "0"))  # カフェカテゴリのID
+
+# --- Google認証情報切り替え ---
+USE_RAILWAY = os.getenv("RAILWAY", "false").lower() == "true"
+
+if USE_RAILWAY:
+    # Railwayの場合は環境変数にJSONを入れる
+    CREDENTIALS_JSON = os.getenv("GOOGLE_CREDENTIALS_JSON")
+    if not CREDENTIALS_JSON:
+        raise RuntimeError("RAILWAY=true ですが、GOOGLE_CREDENTIALS_JSON が設定されていません。")
+    credentials = service_account.Credentials.from_service_account_info(json.loads(CREDENTIALS_JSON))
+else:
+    # ローカルの場合はファイルパスを使う
+    CREDENTIALS_PATH = os.getenv("GOOGLE_CREDENTIALS_PATH")
+    if not CREDENTIALS_PATH or not os.path.exists(CREDENTIALS_PATH):
+        raise RuntimeError("RAILWAY=false ですが、CREDENTIALS_PATH が存在しません。")
+    credentials = service_account.Credentials.from_service_account_file(CREDENTIALS_PATH)
+
 # --- GUILD ID の読み取り（テスト時は .env に GUILD_ID を入れてください） ---
 GUILD_ID_ENV = os.getenv("GUILD_ID")
 if GUILD_ID_ENV:
