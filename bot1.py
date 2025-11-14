@@ -12,7 +12,7 @@ from datetime import datetime
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 SPREADSHEET_ID = os.getenv("GOOGLE_SHEET_ID")
-CAFE_CATEGORY_ID = int(os.getenv("CAFE_CATEGORY_ID_TEST", "0"))  # カフェカテゴリのID
+CAFE_CATEGORY_ID = int(os.getenv("CAFE_CATEGORY_ID", "0"))  # カフェカテゴリのID
 
 # --- Google認証情報切り替え ---
 USE_RAILWAY = os.getenv("RAILWAY", "false").lower() == "true"
@@ -31,7 +31,7 @@ else:
     credentials = service_account.Credentials.from_service_account_file(CREDENTIALS_PATH)
 
 # --- GUILD ID の読み取り（テスト時は .env に GUILD_ID を入れてください） ---
-GUILD_ID_ENV = os.getenv("GUILD_ID_TEST")  # テスト用ギルドID
+GUILD_ID_ENV = os.getenv("GUILD_ID")  # テスト用ギルドID
 if GUILD_ID_ENV:
     try:
         GUILD_ID = int(GUILD_ID_ENV)
@@ -170,8 +170,8 @@ class ReservationModal(ui.Modal, title="☕ 予約情報を入力してくださ
 
         self.user_name = ui.TextInput(label="予約者名", placeholder="キャンセルの際に必要です。")
         self.day = ui.TextInput(label="予約日", default="2025/11/01", placeholder="例: 2025/11/01")
-        self.start_time = ui.TextInput(label="開始時間", placeholder="例: 13:00(半角)")
-        self.end_time = ui.TextInput(label="終了時間", placeholder="例: 14:00(半角)")
+        self.start_time = ui.TextInput(label="開始時間", default="13:00", placeholder="例: 13:00(半角)")
+        self.end_time = ui.TextInput(label="終了時間", default="14:00", placeholder="例: 14:00(半角)")
 
         self.add_item(self.user_name)
         self.add_item(self.day)
