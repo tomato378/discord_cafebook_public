@@ -170,7 +170,7 @@ class ReservationModal(ui.Modal, title="☕ 予約情報を入力してくださ
         super().__init__()
         self.channel_name = channel_name
 
-        self.user_name = ui.TextInput(label="予約者名", placeholder="キャンセルの際に必要です")
+        self.user_name = ui.TextInput(label="予約者名", placeholder="キャンセルの際に必要です。")
         self.day = ui.TextInput(label="予約日", default="2025/11/01", placeholder="例: 2025/11/01")
         self.start_time = ui.TextInput(label="開始時間", placeholder="例: 13:00(半角)")
         self.end_time = ui.TextInput(label="終了時間", placeholder="例: 14:00(半角)")
