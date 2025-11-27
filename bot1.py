@@ -12,7 +12,17 @@ from datetime import datetime
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 SPREADSHEET_ID = os.getenv("GOOGLE_SHEET_ID")
-CAFE_CATEGORY_ID = int(os.getenv("CAFE_CATEGORY_ID", "0"))  # カフェカテゴリのID
+
+# --- サーバー切り替え ---
+TEST_SERVER = os.getenv("TEST_SERVER", "false").lower() == "true"
+
+if TEST_SERVER:
+    CAFE_CATEGORY_ID = int(os.getenv("CAFE_CATEGORY_ID_TEST", "0"))  # テスト用カフェカテゴリのID
+    GUILD_ID_ENV = os.getenv("GUILD_ID_TEST")  # テスト用ギルドID
+else:
+    CAFE_CATEGORY_ID = int(os.getenv("CAFE_CATEGORY_ID", "0"))  # 本番用カフェカテゴリのID
+    GUILD_ID_ENV = os.getenv("GUILD_ID")  # 本番用ギルドID
+
 
 # --- Google認証情報切り替え ---
 USE_RAILWAY = os.getenv("RAILWAY", "false").lower() == "true"
@@ -31,7 +41,6 @@ else:
     credentials = service_account.Credentials.from_service_account_file(CREDENTIALS_PATH)
 
 # --- GUILD ID の読み取り（テスト時は .env に GUILD_ID を入れてください） ---
-GUILD_ID_ENV = os.getenv("GUILD_ID")  # テスト用ギルドID
 if GUILD_ID_ENV:
     try:
         GUILD_ID = int(GUILD_ID_ENV)
@@ -59,13 +68,15 @@ bot = commands.Bot(command_prefix="/", intents=intents)
 # --- ユーティリティ関数 ---
 def format_reservation_message(reservation: dict, prefix: str = "") -> str:
     """予約情報を表示用の文字列にフォーマット"""
-    return (
+    msg = (
         f"{prefix}\n"
         f"👤 予約者：{reservation['user']}\n"
         f"📅 予約日：{reservation['day']}\n"
         f"🏠 場所：{reservation['channel']}\n"
         f"🕒 時間：{reservation['start']}〜{reservation['end']}"
-    ).strip()
+    )
+    
+    return msg.strip()
 
 def create_reservation_dict(row: list, row_index: int) -> dict:
     """スプレッドシートの行から予約情報の辞書を作成"""
@@ -75,7 +86,9 @@ def create_reservation_dict(row: list, row_index: int) -> dict:
         "channel": row[1],
         "day": row[2],
         "start": row[3],
-        "end": row[4]
+        "end": row[4],
+        "user_name": row[5] if len(row) > 5 else "N/A",
+        "timestamp": row[6] if len(row) > 6 else "N/A"
     }
 
 # --- Google Sheets 操作 ---
@@ -83,7 +96,7 @@ class SheetOperations:
     def __init__(self):
         self.service = None
         self.sheet_name = "sheet1"
-        self.header = ["ユーザー名", "メニュー名", "日付", "開始", "終了"]
+        self.header = ["ユーザー名", "メニュー名", "日付", "開始", "終了", "ユーザーID", "タイムスタンプ"]
 
     def get_service(self):
         """Sheets APIサービスを取得（初回のみ初期化）"""
@@ -164,9 +177,10 @@ sheets = SheetOperations()
 
 # --- モーダル定義（予約用） ---
 class ReservationModal(ui.Modal, title="☕ 予約情報を入力してください"):
-    def __init__(self, channel_name: str):
+    def __init__(self, channel_name: str, user: discord.User = None):
         super().__init__()
         self.channel_name = channel_name
+        self.user_object = user
 
         self.user_name = ui.TextInput(label="予約者名", placeholder="キャンセルの際に必要です。")
         self.day = ui.TextInput(label="予約日", default="2025/11/01", placeholder="例: 2025/11/01")
@@ -209,12 +223,18 @@ class ReservationModal(ui.Modal, title="☕ 予約情報を入力してくださ
 
         # 重複なしなら登録
         try:
+            # タイムスタンプを取得
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            user_name = str(interaction.user.name)
+            
             sheets.append_row([
                 self.user_name.value,
                 self.channel_name,
                 self.day.value,
                 self.start_time.value,
-                self.end_time.value
+                self.end_time.value,
+                user_name,
+                timestamp
             ])
 
             # 登録した予約情報を表示用にフォーマット
@@ -223,11 +243,13 @@ class ReservationModal(ui.Modal, title="☕ 予約情報を入力してくださ
                 "channel": self.channel_name,
                 "day": self.day.value,
                 "start": self.start_time.value,
-                "end": self.end_time.value
+                "end": self.end_time.value,
+                "user_name": user_name,
+                "timestamp": timestamp
             }
             await interaction.followup.send(
                 format_reservation_message(reservation, prefix="✅ 予約を登録しました！"),
-                ephemeral=False
+                ephemeral=True
             )
         except Exception as e:
             await interaction.followup.send(
@@ -236,9 +258,10 @@ class ReservationModal(ui.Modal, title="☕ 予約情報を入力してくださ
 
 # --- モーダル定義（キャンセル用） ---
 class CancelReservationModal(ui.Modal, title="☕ キャンセルしたい予約情報を入力してください"):
-    def __init__(self, channel_name: str):
+    def __init__(self, channel_name: str, user: discord.User = None):
         super().__init__()
         self.channel_name = channel_name
+        self.user_object = user
 
         self.user_name = ui.TextInput(label="予約者名", placeholder="キャンセルの際に必要です")
         self.day = ui.TextInput(label="予約日", default="2025/11/01", placeholder="例: 2025/11/01")
@@ -309,7 +332,7 @@ class MenuSelect(ui.Select):
 
     async def callback(self, interaction: discord.Interaction):
         channel_name = self.values[0]
-        modal = CancelReservationModal(channel_name) if self.is_cancel else ReservationModal(channel_name)
+        modal = CancelReservationModal(channel_name, user=interaction.user) if self.is_cancel else ReservationModal(channel_name, user=interaction.user)
         await interaction.response.send_modal(modal)
 
 # --- View定義 ---
