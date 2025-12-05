@@ -425,11 +425,23 @@ class ChannelSelect(ui.Select):
             announce_sent = True
             await announce_channel.send(embed=embed)
 
-        # 画面に残るエフェメラルメッセージを出さない
-        try:
-            await interaction.delete_original_response()
-        except discord.HTTPException:
-            pass
+        participant_view = ParticipantSelectView(
+            row_index=row_index,
+            owner=interaction.user,
+        )
+        await interaction.followup.send(
+            content=(
+                "予約を登録しました。\n"
+                f"席: {channel.name}\n"
+                f"日付: {self.parent_view.day}\n"
+                f"時間: {self.parent_view.start}〜{self.parent_view.end}\n"
+                "参加者を追加しますか？（任意・スキップ可）"
+            ),
+            view=participant_view,
+            ephemeral=True,
+        )
+        if not announce_sent and RESERVATION_ANNOUNCE_CHANNEL_ID:
+            await interaction.followup.send("指定のアナウンスチャンネルが見つかりませんでした。", ephemeral=True)
 
 
 class ChannelSelectView(ui.View):
