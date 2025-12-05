@@ -9,6 +9,7 @@ from discord.ext import commands, tasks
 from dotenv import load_dotenv
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
+from aiohttp import web
 
 # --- 環境変数 ---
 load_dotenv()
@@ -52,11 +53,32 @@ def _maybe_guild_scope(func):
         return app_commands.guilds(GUILD_OBJ)(func)
     return func
 
+
+async def _health_handler(request: web.Request) -> web.Response:
+    return web.Response(text="ok")
+
+
+async def _start_health_server():
+    global _health_app_started
+    if _health_app_started:
+        return
+    _health_app_started = True
+    app = web.Application()
+    app.add_routes([web.get("/", _health_handler), web.get("/health", _health_handler)])
+    port = int(os.getenv("PORT", "10000"))
+    if port <= 0:
+        port = 10000
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    print(f"🌐 Health server running on 0.0.0.0:{port}")
 # --- Bot 設定 ---
 intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
 bot = commands.Bot(command_prefix="/", intents=intents)
+_health_app_started = False
 
 
 # --- ユーティリティ ---
@@ -633,6 +655,7 @@ async def on_ready():
         if not reminder_loop.is_running():
             reminder_loop.start()
         print(f"☕ bot ready as {bot.user} (TEST_SERVER={TEST_SERVER}, GUILD_ID={GUILD_ID})")
+        await _start_health_server()
     except Exception as exc:
         print(f"Failed to start bot: {exc}")
 
