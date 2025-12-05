@@ -462,7 +462,10 @@ class ReservationMenu(ui.View):
 
     @ui.button(label="📝 予約する", style=discord.ButtonStyle.primary, custom_id="cafebook2:reserve")
     async def reserve_btn(self, interaction: discord.Interaction, _: ui.Button):
-        await interaction.response.send_modal(TimeInputModal(interaction.user))
+        try:
+            await interaction.response.send_modal(TimeInputModal(interaction.user))
+        except discord.NotFound:
+            return
 
     @ui.button(label="❌ キャンセル", style=discord.ButtonStyle.danger, custom_id="cafebook2:cancel")
     async def cancel_btn(self, interaction: discord.Interaction, _: ui.Button):
@@ -520,7 +523,11 @@ async def show_menu(interaction: discord.Interaction):
 @bot.tree.command(name="cafebook_panel", description="(互換) 旧コマンド: 予約メニューを表示")
 async def cafebook_panel(interaction: discord.Interaction):
     view = ReservationMenu()
-    await interaction.response.send_message("操作を選んでください。", view=view)
+    try:
+        await interaction.response.send_message("操作を選んでください。", view=view)
+    except discord.NotFound:
+        # 古いメッセージや無効トークンで呼ばれた場合は握りつぶす
+        return
 
 
 @bot.event
