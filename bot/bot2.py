@@ -99,6 +99,8 @@ def ensure_token() -> None:
         raise RuntimeError("DISCORD_TOKEN と GOOGLE_SHEET_ID を設定してください。")
     if CAFE_CATEGORY_ID <= 0:
         raise RuntimeError("CAFE_CATEGORY_ID (または CAFE_CATEGORY_ID_TEST) を設定してください。")
+    # 起動時に認証情報も確認する
+    load_credentials()
 
 
 def is_past_reservation(day: str, end: str) -> bool:
@@ -110,8 +112,21 @@ def is_past_reservation(day: str, end: str) -> bool:
 
 
 def load_credentials():
+    json_blob = os.getenv("GOOGLE_CREDENTIALS_JSON")
+    if json_blob:
+        import json
+
+        info = json.loads(json_blob)
+        return service_account.Credentials.from_service_account_info(
+            info, scopes=["https://www.googleapis.com/auth/spreadsheets"]
+        )
+
+    path = CREDENTIALS_PATH
+    if not os.path.exists(path):
+        raise RuntimeError(f"Google 認証ファイルが見つかりません: {path}")
+
     return service_account.Credentials.from_service_account_file(
-        CREDENTIALS_PATH, scopes=["https://www.googleapis.com/auth/spreadsheets"]
+        path, scopes=["https://www.googleapis.com/auth/spreadsheets"]
     )
 
 
