@@ -296,7 +296,7 @@ class TimeInputModal(ui.Modal, title="☕ 予約時間を入力"):
     def __init__(self, user: discord.User):
         super().__init__(timeout=300)
         self.request_user = user
-        self.day = ui.TextInput(label="日付 (YYYY/MM/DD)", default=str(datetime.now().date()))
+        self.day = ui.TextInput(label="日付 (YYYY/MM/DD)", default=datetime.now().strftime("%Y/%m/%d"))
         self.start_time = ui.TextInput(label="開始 (HH:MM)", default="13:00")
         self.end_time = ui.TextInput(label="終了 (HH:MM)", default="14:00")
         self.add_item(self.day)
