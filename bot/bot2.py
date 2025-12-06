@@ -448,6 +448,19 @@ class ChannelSelect(ui.Select):
         announce_channel = interaction.guild.get_channel(RESERVATION_ANNOUNCE_CHANNEL_ID) if interaction.guild else None
         announce_sent = False
         if announce_channel:
+            participants = sheets.find_by_user(interaction.user.id)
+            participants_text = "なし"
+            # 直近のこの行を participants_json から拾う
+            for r in participants:
+                if r.get("row_index") == row_index:
+                    try:
+                        data = json.loads(r.get("participants") or "[]")
+                        names = [item.get("name", "") for item in data if item.get("name")]
+                        if names:
+                            participants_text = ", ".join(names)
+                    except json.JSONDecodeError:
+                        pass
+                    break
             embed = discord.Embed(
                 title="☕ 予約が作成されました",
                 description=f"{interaction.user.mention} が {channel.name} を予約しました。",
@@ -455,6 +468,7 @@ class ChannelSelect(ui.Select):
             )
             embed.add_field(name="日付", value=self.parent_view.day, inline=True)
             embed.add_field(name="時間", value=f"{self.parent_view.start}〜{self.parent_view.end}", inline=True)
+            embed.add_field(name="参加者", value=participants_text, inline=False)
             announce_sent = True
             await announce_channel.send(embed=embed)
 
@@ -505,11 +519,7 @@ class ParticipantSelect(ui.UserSelect):
             {"id": str(member.id), "name": member.mention} for member in self.values
         ]
         sheets.update_participants(self.parent_view.row_index, participants)
-        mentions = ", ".join(member.mention for member in self.values) if self.values else "なし"
-        await interaction.response.edit_message(
-            content=f"参加者を登録しました: {mentions}",
-            view=None,
-        )
+        await interaction.response.edit_message(view=None)
 
 
 class ParticipantSelectView(ui.View):
