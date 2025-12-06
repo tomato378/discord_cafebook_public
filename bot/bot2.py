@@ -33,11 +33,13 @@ SHEET_NAME = os.getenv("GOOGLE_SHEET_NAME", "sheet1")
 
 if TEST_SERVER:
     CAFE_CATEGORY_ID = _read_int("CAFE_CATEGORY_ID_TEST") or 0
+    CAFE_CATEGORY_NAME = os.getenv("CAFE_CATEGORY_NAME_TEST", "").strip()
     GUILD_ID = _read_int("GUILD_ID_TEST")
     RESERVATION_ANNOUNCE_CHANNEL_ID = _read_int("RESERVATION_ANNOUNCE_CHANNEL_ID_TEST") or 0
     REMINDER_CHANNEL_ID = _read_int("REMINDER_CHANNEL_ID_TEST") or 0
 else:
     CAFE_CATEGORY_ID = _read_int("CAFE_CATEGORY_ID") or 0
+    CAFE_CATEGORY_NAME = os.getenv("CAFE_CATEGORY_NAME", "").strip()
     GUILD_ID = _read_int("GUILD_ID")
     RESERVATION_ANNOUNCE_CHANNEL_ID = _read_int("RESERVATION_ANNOUNCE_CHANNEL_ID") or 0
     REMINDER_CHANNEL_ID = _read_int("REMINDER_CHANNEL_ID") or 0
@@ -52,6 +54,37 @@ def _maybe_guild_scope(func):
     if TEST_SERVER and GUILD_OBJ:
         return app_commands.guilds(GUILD_OBJ)(func)
     return func
+
+
+def resolve_cafe_category(guild: Optional[discord.Guild]) -> Optional[discord.CategoryChannel]:
+    if not guild:
+        return None
+    if CAFE_CATEGORY_ID:
+        ch = guild.get_channel(CAFE_CATEGORY_ID)
+        if isinstance(ch, discord.CategoryChannel):
+            return ch
+    if CAFE_CATEGORY_NAME:
+        # 完全一致を優先
+        for cat in guild.categories:
+            if cat.name == CAFE_CATEGORY_NAME:
+                return cat
+        # 部分一致も試す
+        lowered = CAFE_CATEGORY_NAME.lower()
+        for cat in guild.categories:
+            if lowered in cat.name.lower():
+                return cat
+    return None
+
+
+def _category_hint(guild: Optional[discord.Guild]) -> str:
+    names = []
+    if guild:
+        names = [cat.name for cat in guild.categories]
+    return (
+        "カテゴリが見つかりません。\n"
+        f"設定ID: {CAFE_CATEGORY_ID or '未設定'} / 設定NAME: {CAFE_CATEGORY_NAME or '未設定'}\n"
+        f"ギルド内カテゴリ一覧: {', '.join(names) if names else '取得できませんでした'}"
+    )
 
 
 async def _health_handler(request: web.Request) -> web.Response:
@@ -97,8 +130,8 @@ def overlaps(start_a: str, end_a: str, start_b: str, end_b: str) -> bool:
 def ensure_token() -> None:
     if not TOKEN or not SPREADSHEET_ID:
         raise RuntimeError("DISCORD_TOKEN と GOOGLE_SHEET_ID を設定してください。")
-    if CAFE_CATEGORY_ID <= 0:
-        raise RuntimeError("CAFE_CATEGORY_ID (または CAFE_CATEGORY_ID_TEST) を設定してください。")
+    if CAFE_CATEGORY_ID <= 0 and not CAFE_CATEGORY_NAME:
+        raise RuntimeError("CAFE_CATEGORY_ID (または CAFE_CATEGORY_ID_TEST) か CAFE_CATEGORY_NAME(_TEST) を設定してください。")
     # 起動時に認証情報も確認する
     load_credentials()
 
@@ -353,9 +386,9 @@ class TimeInputModal(ui.Modal, title="☕ 予約時間を入力"):
             await interaction.response.send_message("開始時間は終了時間より前にしてください。", ephemeral=True)
             return
 
-        category = interaction.guild.get_channel(CAFE_CATEGORY_ID) if interaction.guild else None
+        category = resolve_cafe_category(interaction.guild)
         if not category or not isinstance(category, discord.CategoryChannel):
-            await interaction.response.send_message("カフェカテゴリが見つかりません。", ephemeral=True)
+            await interaction.response.send_message(_category_hint(interaction.guild), ephemeral=True)
             return
 
         candidates = [
@@ -511,13 +544,21 @@ class ReservationMenu(ui.View):
 
     @ui.button(label="📝 予約する", style=discord.ButtonStyle.primary, custom_id="cafebook2:reserve")
     async def reserve_btn(self, interaction: discord.Interaction, _: ui.Button):
+        if interaction.response.is_done():
+            return
         try:
             await interaction.response.send_modal(TimeInputModal(interaction.user))
         except discord.NotFound:
             return
+        except discord.HTTPException as e:
+            # Interaction already acknowledged等は握りつぶす
+            if e.code != 40060:
+                raise
 
     @ui.button(label="❌ キャンセル", style=discord.ButtonStyle.danger, custom_id="cafebook2:cancel")
     async def cancel_btn(self, interaction: discord.Interaction, _: ui.Button):
+        if interaction.response.is_done():
+            return
         await send_cancellation_embeds(interaction)
 
 
@@ -528,7 +569,14 @@ async def send_cancellation_embeds(interaction: discord.Interaction):
         if not is_past_reservation(res["day"], res["end"])
     ]
     if not matches:
-        await interaction.response.send_message("あなたの予約は見つかりませんでした。", ephemeral=True)
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send("あなたの予約は見つかりませんでした。", ephemeral=True)
+            else:
+                await interaction.response.send_message("あなたの予約は見つかりませんでした。", ephemeral=True)
+        except discord.HTTPException as e:
+            if e.code != 40060:
+                raise
         return
 
     await interaction.response.defer(ephemeral=True)
@@ -618,6 +666,7 @@ async def reminder_loop():
             return
 
     now = datetime.now()
+    today_key = now.strftime("%Y/%m/%d")
     for row_index, row in sheets.fetch_rows():
         reminded = (row[7] or "").strip().lower() == "true"
         if reminded:
@@ -625,6 +674,8 @@ async def reminder_loop():
         day = row[2]
         start = row[3]
         if not day or not start:
+            continue
+        if day != today_key:
             continue
         try:
             start_dt = datetime.strptime(f"{day} {start}", "%Y/%m/%d %H:%M")
@@ -657,22 +708,13 @@ async def on_ready():
         if GUILD_OBJ and TEST_SERVER:
             guild = bot.get_guild(GUILD_ID)
             if guild is None:
-                print(f"⚠️ Bot is not in guild {GUILD_ID}. Falling back to global sync.")
-                synced = await bot.tree.sync()
-                print(f"🔁 Globally synced {len(synced)} commands (fallback)")
-                fetched = await bot.tree.fetch_commands()
-                print(f"📡 Remote global commands: {[c.name for c in fetched]}")
-            else:
-                synced = await bot.tree.sync(guild=GUILD_OBJ)
-                print(f"🔁 Synced {len(synced)} commands to guild {GUILD_ID}")
-                fetched = await bot.tree.fetch_commands(guild=GUILD_OBJ)
-                print(f"📡 Remote guild commands: {[c.name for c in fetched]}")
-                if len(fetched) == 0:
-                    print("⚠️ Guild sync returned 0. Falling back to global sync for visibility.")
-                    synced = await bot.tree.sync()
-                    print(f"🔁 Globally synced {len(synced)} commands (fallback after empty guild sync)")
-                    fetched = await bot.tree.fetch_commands()
-                    print(f"📡 Remote global commands: {[c.name for c in fetched]}")
+                print(f"⚠️ Bot is not in guild {GUILD_ID}. Invite it with the applications.commands scope.")
+            synced = await bot.tree.sync(guild=GUILD_OBJ)
+            print(f"🔁 Synced {len(synced)} commands to guild {GUILD_ID}")
+            fetched = await bot.tree.fetch_commands(guild=GUILD_OBJ)
+            print(f"📡 Remote guild commands: {[c.name for c in fetched]}")
+            if len(fetched) == 0:
+                print("⚠️ Guild sync returned 0. Check GUILD_ID(_TEST) and that the bot was invited with applications.commands. No global registration performed.")
         else:
             synced = await bot.tree.sync()
             print(f"🔁 Globally synced {len(synced)} commands")
