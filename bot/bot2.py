@@ -1,6 +1,6 @@
 import json
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import discord
@@ -48,6 +48,7 @@ REMINDER_MINUTES_BEFORE = _read_int("REMINDER_MINUTES_BEFORE") or 15
 CREDENTIALS_PATH = os.getenv("GOOGLE_CREDENTIALS_PATH", "credentials.json")
 
 GUILD_OBJ = discord.Object(id=GUILD_ID) if GUILD_ID else None
+JST = timezone(timedelta(hours=9))
 
 
 def _maybe_guild_scope(func):
@@ -138,10 +139,10 @@ def ensure_token() -> None:
 
 def is_past_reservation(day: str, end: str) -> bool:
     try:
-        end_dt = datetime.strptime(f"{day} {end}", "%Y/%m/%d %H:%M")
+        end_dt = datetime.strptime(f"{day} {end}", "%Y/%m/%d %H:%M").replace(tzinfo=JST)
     except ValueError:
         return False
-    return end_dt < datetime.now()
+    return end_dt < datetime.now(JST)
 
 
 def load_credentials():
@@ -405,7 +406,7 @@ class TimeInputModal(ui.Modal, title="☕ 予約時間を入力"):
     def __init__(self, user: discord.User):
         super().__init__(timeout=300)
         self.request_user = user
-        self.day = ui.TextInput(label="日付 (YYYY/MM/DD)", default=datetime.now().strftime("%Y/%m/%d"))
+        self.day = ui.TextInput(label="日付 (YYYY/MM/DD)", default=datetime.now(JST).strftime("%Y/%m/%d"))
         self.start_time = ui.TextInput(label="開始 (HH:MM)", default="13:00")
         self.end_time = ui.TextInput(label="終了 (HH:MM)", default="14:00")
         self.add_item(self.day)
@@ -714,7 +715,7 @@ async def reminder_loop():
         except (discord.NotFound, discord.Forbidden, discord.HTTPException):
             return
 
-    now = datetime.now()
+    now = datetime.now(JST)
     today_key = now.strftime("%Y/%m/%d")
     for row_index, row in sheets.fetch_rows():
         reminded = (row[7] or "").strip().lower() == "true"
@@ -727,7 +728,7 @@ async def reminder_loop():
         if day != today_key:
             continue
         try:
-            start_dt = datetime.strptime(f"{day} {start}", "%Y/%m/%d %H:%M")
+            start_dt = datetime.strptime(f"{day} {start}", "%Y/%m/%d %H:%M").replace(tzinfo=JST)
         except ValueError:
             continue
         delta = start_dt - now
