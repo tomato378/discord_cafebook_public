@@ -145,22 +145,61 @@ def is_past_reservation(day: str, end: str) -> bool:
 
 
 def load_credentials():
+    # 1. GOOGLE_CREDENTIALS_JSON（環境変数）のチェック
     json_blob = os.getenv("GOOGLE_CREDENTIALS_JSON")
     if json_blob:
-        import json
-
         info = json.loads(json_blob)
         return service_account.Credentials.from_service_account_info(
             info, scopes=["https://www.googleapis.com/auth/spreadsheets"]
         )
 
-    path = CREDENTIALS_PATH
-    if not os.path.exists(path):
-        raise RuntimeError(f"Google 認証ファイルが見つかりません: {path}")
+    # 2. Secret Files のパス
+    secret_file_path = "/etc/secrets/credentials.json"
 
-    return service_account.Credentials.from_service_account_file(
-        path, scopes=["https://www.googleapis.com/auth/spreadsheets"]
-    )
+    # Render は runtime 後にマウントするので "遅延チェック" にする
+    if os.path.exists(secret_file_path):
+        return service_account.Credentials.from_service_account_file(
+            secret_file_path,
+            scopes=["https://www.googleapis.com/auth/spreadsheets"]
+        )
+
+    # 3. ローカル用のパス
+    local_path = "credentials.json"
+    if os.path.exists(local_path):
+        return service_account.Credentials.from_service_account_file(
+            local_path,
+            scopes=["https://www.googleapis.com/auth/spreadsheets"]
+        )
+
+    raise RuntimeError("Google 認証ファイルが見つかりません。")
+def load_credentials():
+    # 1. GOOGLE_CREDENTIALS_JSON（環境変数）のチェック
+    json_blob = os.getenv("GOOGLE_CREDENTIALS_JSON")
+    if json_blob:
+        info = json.loads(json_blob)
+        return service_account.Credentials.from_service_account_info(
+            info, scopes=["https://www.googleapis.com/auth/spreadsheets"]
+        )
+
+    # 2. Secret Files のパス
+    secret_file_path = "/etc/secrets/credentials.json"
+
+    # Render は runtime 後にマウントするので "遅延チェック" にする
+    if os.path.exists(secret_file_path):
+        return service_account.Credentials.from_service_account_file(
+            secret_file_path,
+            scopes=["https://www.googleapis.com/auth/spreadsheets"]
+        )
+
+    # 3. ローカル用のパス
+    local_path = "credentials.json"
+    if os.path.exists(local_path):
+        return service_account.Credentials.from_service_account_file(
+            local_path,
+            scopes=["https://www.googleapis.com/auth/spreadsheets"]
+        )
+
+    raise RuntimeError("Google 認証ファイルが見つかりません。")
 
 
 # --- Google Sheet 操作 ---
