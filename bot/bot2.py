@@ -208,7 +208,7 @@ class SheetOperations:
     def __init__(self) -> None:
         self.service = None
         self.sheet_name = SHEET_NAME
-        self.header = ["予約者", "チャンネル", "日付", "開始", "終了", "予約者ID", "参加者JSON", "reminded"]
+        self.header = ["予約者", "チャンネル", "日付", "開始", "終了", "予約者ID", "参加者JSON", "作成日時", "reminded"]
         self.sheet_id: Optional[int] = None
 
     def _get_api(self):
@@ -234,13 +234,13 @@ class SheetOperations:
     def ensure_header_row(self) -> None:
         api = self._get_api()
         result = api.values().get(
-            spreadsheetId=SPREADSHEET_ID, range=f"{self.sheet_name}!A1:H1"
+            spreadsheetId=SPREADSHEET_ID, range=f"{self.sheet_name}!A1:I1"
         ).execute()
         values = result.get("values", [])
         if not values:
             api.values().update(
                 spreadsheetId=SPREADSHEET_ID,
-                range=f"{self.sheet_name}!A1:H1",
+                range=f"{self.sheet_name}!A1:I1",
                 valueInputOption="RAW",
                 body={"values": [self.header]},
             ).execute()
@@ -267,7 +267,7 @@ class SheetOperations:
             ).execute()
             api.values().update(
                 spreadsheetId=SPREADSHEET_ID,
-                range=f"{self.sheet_name}!A1:H1",
+                range=f"{self.sheet_name}!A1:I1",
                 valueInputOption="RAW",
                 body={"values": [self.header]},
             ).execute()
@@ -276,15 +276,15 @@ class SheetOperations:
         self.ensure_header_row()
         api = self._get_api()
         result = api.values().get(
-            spreadsheetId=SPREADSHEET_ID, range=f"{self.sheet_name}!A:H"
+            spreadsheetId=SPREADSHEET_ID, range=f"{self.sheet_name}!A:I"
         ).execute()
         rows = result.get("values", [])
         data: List[Tuple[int, List[str]]] = []
         for idx, row in enumerate(rows, start=1):
             if idx == 1:
                 continue
-            padded = row + [""] * max(0, 8 - len(row))
-            data.append((idx, padded[:8]))
+            padded = row + [""] * max(0, 9 - len(row))
+            data.append((idx, padded[:9]))
         return data
 
     def append_row(
@@ -306,6 +306,7 @@ class SheetOperations:
             end,
             str(user_id),
             "[]",
+            datetime.now(JST).strftime("%Y/%m/%d %H:%M:%S"),
             "FALSE",
         ]
         response = (
@@ -342,7 +343,7 @@ class SheetOperations:
         api = self._get_api()
         api.values().update(
             spreadsheetId=SPREADSHEET_ID,
-            range=f"{self.sheet_name}!H{row_index}",
+            range=f"{self.sheet_name}!I{row_index}",
             valueInputOption="RAW",
             body={"values": [["TRUE"]]},
         ).execute()
@@ -393,6 +394,7 @@ class SheetOperations:
                     "start": row[3],
                     "end": row[4],
                     "participants": row[6],
+                    "created_at": row[7],
                 }
             )
         return results
@@ -641,8 +643,8 @@ async def send_cancellation_embeds(interaction: discord.Interaction):
         embed.add_field(name="時間", value=f"{res['start']}〜{res['end']}", inline=True)
         participants = res.get("participants") or "[]"
         try:
-            parsed = json.loads(participants)
-            mention_text = ", ".join(item.get("name", "") for item in parsed if item.get("name")) or "なし"
+            parsed_mentions = parse_participant_mentions(participants)
+            mention_text = ", ".join(parsed_mentions) if parsed_mentions else "なし"
         except json.JSONDecodeError:
             mention_text = "なし"
         embed.add_field(name="参加者", value=mention_text, inline=False)
@@ -701,9 +703,19 @@ def parse_participant_mentions(raw: str) -> List[str]:
         return []
     mentions: List[str] = []
     for item in data:
-        name = item.get("name") if isinstance(item, dict) else None
-        if name:
-            mentions.append(name)
+        if isinstance(item, dict):
+            member_id = item.get("id")
+            name = item.get("name")
+            if member_id:
+                mentions.append(f"<@{member_id}>")
+            elif name:
+                mentions.append(str(name))
+        else:
+            try:
+                member_id = int(item)
+                mentions.append(f"<@{member_id}>")
+            except (TypeError, ValueError):
+                continue
     return mentions
 
 
@@ -721,7 +733,7 @@ async def reminder_loop():
     now = datetime.now(JST)
     today_key = now.strftime("%Y/%m/%d")
     for row_index, row in sheets.fetch_rows():
-        reminded = (row[7] or "").strip().lower() == "true"
+        reminded = (row[8] or "").strip().lower() == "true"
         if reminded:
             continue
         day = row[2]
