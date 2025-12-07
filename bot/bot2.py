@@ -484,37 +484,15 @@ class ChannelSelect(ui.Select):
             user_id=interaction.user.id,
         )
 
-        # 公開メッセージ
-        announce_channel = interaction.guild.get_channel(RESERVATION_ANNOUNCE_CHANNEL_ID) if interaction.guild else None
-        announce_sent = False
-        if announce_channel:
-            participants = sheets.find_by_user(interaction.user.id)
-            participants_text = "なし"
-            # 直近のこの行を participants_json から拾う
-            for r in participants:
-                if r.get("row_index") == row_index:
-                    try:
-                        data = json.loads(r.get("participants") or "[]")
-                        names = [item.get("name", "") for item in data if item.get("name")]
-                        if names:
-                            participants_text = ", ".join(names)
-                    except json.JSONDecodeError:
-                        pass
-                    break
-            embed = discord.Embed(
-                title="☕ 予約が作成されました",
-                description=f"{interaction.user.mention} が {channel.name} を予約しました。",
-                color=discord.Color.blurple(),
-            )
-            embed.add_field(name="日付", value=self.parent_view.day, inline=True)
-            embed.add_field(name="時間", value=f"{self.parent_view.start}〜{self.parent_view.end}", inline=True)
-            embed.add_field(name="参加者", value=participants_text, inline=False)
-            announce_sent = True
-            await announce_channel.send(embed=embed)
-
         participant_view = ParticipantSelectView(
             row_index=row_index,
             owner=interaction.user,
+            channel_name=channel.name,
+            day=self.parent_view.day,
+            start=self.parent_view.start,
+            end=self.parent_view.end,
+            announce_channel=interaction.guild.get_channel(RESERVATION_ANNOUNCE_CHANNEL_ID) if interaction.guild else None,
+            user_mention=interaction.user.mention,
         )
         await interaction.followup.send(
             content=(
@@ -527,7 +505,7 @@ class ChannelSelect(ui.Select):
             view=participant_view,
             ephemeral=True,
         )
-        if not announce_sent and RESERVATION_ANNOUNCE_CHANNEL_ID:
+        if RESERVATION_ANNOUNCE_CHANNEL_ID and participant_view.announce_channel is None:
             await interaction.followup.send("指定のアナウンスチャンネルが見つかりませんでした。", ephemeral=True)
 
 
@@ -559,14 +537,22 @@ class ParticipantSelect(ui.UserSelect):
             {"id": str(member.id), "name": member.mention} for member in self.values
         ]
         sheets.update_participants(self.parent_view.row_index, participants)
+        names = ", ".join(member.mention for member in self.values) if self.values else "なし"
+        await self.parent_view._send_announce(participants_text=names)
         await interaction.response.edit_message(view=None)
 
 
 class ParticipantSelectView(ui.View):
-    def __init__(self, row_index: int, owner: discord.User):
+    def __init__(self, row_index: int, owner: discord.User, channel_name: str, day: str, start: str, end: str, announce_channel: Optional[discord.TextChannel], user_mention: str):
         super().__init__(timeout=180)
         self.row_index = row_index
         self.owner = owner
+        self.channel_name = channel_name
+        self.day = day
+        self.start = start
+        self.end = end
+        self.announce_channel = announce_channel
+        self.user_mention = user_mention
         self.add_item(ParticipantSelect(self))
 
     @ui.button(label="スキップ", style=discord.ButtonStyle.secondary)
@@ -574,7 +560,24 @@ class ParticipantSelectView(ui.View):
         if interaction.user.id != self.owner.id:
             await interaction.response.send_message("予約者のみ操作できます。", ephemeral=True)
             return
+        await self._send_announce(participants_text="なし")
         await interaction.response.edit_message(content="予約が完了しました。", view=None)
+
+    async def _send_announce(self, participants_text: str):
+        if not self.announce_channel:
+            return
+        embed = discord.Embed(
+            title="☕ 予約が作成されました",
+            description=f"{self.user_mention} が {self.channel_name} を予約しました。",
+            color=discord.Color.blurple(),
+        )
+        embed.add_field(name="日付", value=self.day, inline=True)
+        embed.add_field(name="時間", value=f"{self.start}〜{self.end}", inline=True)
+        embed.add_field(name="参加者", value=participants_text or "なし", inline=False)
+        try:
+            await self.announce_channel.send(embed=embed)
+        except discord.HTTPException:
+            pass
 
 
 class CancelButtonView(ui.View):
