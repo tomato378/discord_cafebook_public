@@ -37,14 +37,18 @@ if TEST_SERVER:
     GUILD_ID = _read_int("GUILD_ID_TEST")
     RESERVATION_ANNOUNCE_CHANNEL_ID = _read_int("RESERVATION_ANNOUNCE_CHANNEL_ID_TEST") or 0
     REMINDER_CHANNEL_ID = _read_int("REMINDER_CHANNEL_ID_TEST") or 0
+    REMINDER_MINUTES_BEFORE = (
+        _read_int("REMINDER_MINUTES_BEFORE_TEST")
+        or _read_int("REMINDER_MINUTES_BEFORE")
+        or 15
+    )
 else:
     CAFE_CATEGORY_ID = _read_int("CAFE_CATEGORY_ID") or 0
     CAFE_CATEGORY_NAME = os.getenv("CAFE_CATEGORY_NAME", "").strip()
     GUILD_ID = _read_int("GUILD_ID")
     RESERVATION_ANNOUNCE_CHANNEL_ID = _read_int("RESERVATION_ANNOUNCE_CHANNEL_ID") or 0
     REMINDER_CHANNEL_ID = _read_int("REMINDER_CHANNEL_ID") or 0
-
-REMINDER_MINUTES_BEFORE = _read_int("REMINDER_MINUTES_BEFORE") or 15
+    REMINDER_MINUTES_BEFORE = _read_int("REMINDER_MINUTES_BEFORE") or 15
 CREDENTIALS_PATH = os.getenv("GOOGLE_CREDENTIALS_PATH", "credentials.json")
 
 GUILD_OBJ = discord.Object(id=GUILD_ID) if GUILD_ID else None
@@ -154,17 +158,23 @@ def load_credentials():
             info, scopes=["https://www.googleapis.com/auth/spreadsheets"]
         )
 
-    # 2. Secret Files のパス
-    secret_file_path = "/etc/secrets/credentials.json"
+    # 2. GOOGLE_CREDENTIALS_PATH（ファイルパス）のチェック
+    explicit_path = os.getenv("GOOGLE_CREDENTIALS_PATH")
+    if explicit_path and os.path.exists(explicit_path):
+        return service_account.Credentials.from_service_account_file(
+            explicit_path,
+            scopes=["https://www.googleapis.com/auth/spreadsheets"]
+        )
 
-    # Render は runtime 後にマウントするので "遅延チェック" にする
+    # 3. Secret Files（シークレットファイル）のチェック
+    secret_file_path = "/etc/secrets/credentials.json"
     if os.path.exists(secret_file_path):
         return service_account.Credentials.from_service_account_file(
             secret_file_path,
             scopes=["https://www.googleapis.com/auth/spreadsheets"]
         )
 
-    # 3. ローカル用のパス
+    # 4. ローカルファイルのチェック
     local_path = "credentials.json"
     if os.path.exists(local_path):
         return service_account.Credentials.from_service_account_file(
@@ -172,36 +182,7 @@ def load_credentials():
             scopes=["https://www.googleapis.com/auth/spreadsheets"]
         )
 
-    raise RuntimeError("Google 認証ファイルが見つかりません。")
-def load_credentials():
-    # 1. GOOGLE_CREDENTIALS_JSON（環境変数）のチェック
-    json_blob = os.getenv("GOOGLE_CREDENTIALS_JSON")
-    if json_blob:
-        info = json.loads(json_blob)
-        return service_account.Credentials.from_service_account_info(
-            info, scopes=["https://www.googleapis.com/auth/spreadsheets"]
-        )
-
-    # 2. Secret Files のパス
-    secret_file_path = "/etc/secrets/credentials.json"
-
-    # Render は runtime 後にマウントするので "遅延チェック" にする
-    if os.path.exists(secret_file_path):
-        return service_account.Credentials.from_service_account_file(
-            secret_file_path,
-            scopes=["https://www.googleapis.com/auth/spreadsheets"]
-        )
-
-    # 3. ローカル用のパス
-    local_path = "credentials.json"
-    if os.path.exists(local_path):
-        return service_account.Credentials.from_service_account_file(
-            local_path,
-            scopes=["https://www.googleapis.com/auth/spreadsheets"]
-        )
-
-    raise RuntimeError("Google 認証ファイルが見つかりません。")
-
+    raise RuntimeError("Google 認証情報が見つかりません。")
 
 # --- Google Sheet 操作 ---
 class SheetOperations:
@@ -748,11 +729,36 @@ async def reminder_loop():
             continue
         delta = start_dt - now
         if timedelta(0) <= delta <= timedelta(minutes=REMINDER_MINUTES_BEFORE):
-            mentions = [row[0]] + parse_participant_mentions(row[6])
-            mention_text = " ".join(m for m in mentions if m).strip()
+            mention_ids = []
+            seen_ids = set()
+            try:
+                owner_id = int(row[5])
+                if owner_id not in seen_ids:
+                    seen_ids.add(owner_id)
+                    mention_ids.append(owner_id)
+            except (TypeError, ValueError):
+                pass
+            try:
+                raw_participants = row[6]
+                data = json.loads(raw_participants) if raw_participants else []
+            except (json.JSONDecodeError, TypeError):
+                data = []
+            if isinstance(data, list):
+                for item in data:
+                    candidate_id = item.get("id") if isinstance(item, dict) else item
+                    try:
+                        pid = int(candidate_id)
+                    except (TypeError, ValueError):
+                        continue
+                    if pid in seen_ids:
+                        continue
+                    seen_ids.add(pid)
+                    mention_ids.append(pid)
+            mention_text = " ".join(f"<@{uid}>" for uid in mention_ids).strip()
             try:
                 await channel.send(
-                    f"{mention_text}\n開始 {REMINDER_MINUTES_BEFORE} 分前です！ {day} {row[3]}〜{row[4]} / {row[1]}"
+                    f"{mention_text}\n開始 {REMINDER_MINUTES_BEFORE} 分前です！ {day} {row[3]}〜{row[4]} / {row[1]}",
+                    allowed_mentions=discord.AllowedMentions(users=[discord.Object(id=uid) for uid in mention_ids]),
                 )
             except discord.HTTPException:
                 continue
