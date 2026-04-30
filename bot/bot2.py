@@ -885,6 +885,9 @@ class ReservationMenu(ui.View):
 
 # --- �R�}���h & �C�x���g ---
 async def send_cancellation_embeds(interaction: discord.Interaction):
+    if not interaction.response.is_done():
+        await interaction.response.defer(ephemeral=True)
+
     my_reservations = await sheets_call(sheets.find_by_user, interaction.user.id)
     matches = [
         res
@@ -893,21 +896,10 @@ async def send_cancellation_embeds(interaction: discord.Interaction):
     ]
 
     if not matches:
-        try:
-            if interaction.response.is_done():
-                await interaction.followup.send(
-                    "���Ȃ��̗\�񂪌�����܂���ł���", ephemeral=True
-                )
-            else:
-                await interaction.response.send_message(
-                    "���Ȃ��̗\�񂪌�����܂���ł���", ephemeral=True
-                )
-        except discord.HTTPException as e:
-            if e.code != 40060:
-                raise
+        await interaction.followup.send(
+            "���Ȃ��̗\�񂪌�����܂���ł���", ephemeral=True
+        )
         return
-
-    await interaction.response.defer(ephemeral=True)
 
     for res in matches:
         embed = discord.Embed(title="�\����e", color=discord.Color.orange())
