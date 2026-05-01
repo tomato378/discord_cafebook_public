@@ -1178,14 +1178,14 @@ async def on_ready():
             "? bot ready as "
             f"{bot.user} (RUN_MODE={RUN_MODE}, GUILD_ID={MODE_CONFIG.guild_id})"
         )
-        await _start_health_server()
     except Exception as exc:
         print(f"Failed to start bot: {exc}")
 
 async def main():
-    await _start_health_server()  # 最初に起動
-    await bot.start(TOKEN)
+    await _start_health_server()
+    ensure_token()
+    async with bot:
+        await bot.start(TOKEN)
 
 if __name__ == "__main__":
-    ensure_token()
     asyncio.run(main())
