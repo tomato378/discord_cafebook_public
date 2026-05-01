@@ -1182,7 +1182,10 @@ async def on_ready():
     except Exception as exc:
         print(f"Failed to start bot: {exc}")
 
+async def main():
+    await _start_health_server()  # 最初に起動
+    await bot.start(TOKEN)
 
 if __name__ == "__main__":
     ensure_token()
-    bot.run(TOKEN)
+    asyncio.run(main())
