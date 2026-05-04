@@ -15,7 +15,7 @@ from discord.ext import commands, tasks
 from dotenv import load_dotenv
 from supabase import Client, create_client
 
-# --- ���ϐ� ---
+# --- 変数 ---
 _env_path = Path(__file__).resolve().parents[1] / ".env"
 if _env_path.exists():
     load_dotenv(_env_path)
@@ -90,7 +90,7 @@ def _load_mode_config(mode: str) -> ModeConfig:
         cafe_category_name = _read_first_str(
             "TEST_CAFE_CATEGORY_NAME",
             "CAFE_CATEGORY_NAME_TEST",
-            default="�J�t�F",
+            default="カフェ",
         )
         reservation_announce_channel_id = (
             _read_first_int("TEST_RESERVATION_ANNOUNCE_CHANNEL_ID", "RESERVATION_ANNOUNCE_CHANNEL_ID_TEST")
@@ -145,7 +145,7 @@ GUILD_OBJ = (
 JST = timezone(timedelta(hours=9))
 
 
-# --- Bot �ݒ� ---
+# --- Bot 設定 ---
 intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
@@ -153,7 +153,7 @@ bot = commands.Bot(command_prefix="/", intents=intents)
 _health_app_started = False
 
 
-# --- ���[�e�B���e�B ---
+# --- ユーティリティ ---
 
 def _maybe_guild_scope(func):
     if IS_TEST_MODE and GUILD_OBJ:
@@ -168,10 +168,10 @@ def _mode_prefix() -> str:
 def _category_hint(guild: Optional[discord.Guild]) -> str:
     names = [cat.name for cat in guild.categories] if guild else []
     return (
-        "�J�e�S����������܂���B\n"
-        f"�ݒ�ID: {MODE_CONFIG.cafe_category_id or '���ݒ�'} / "
-        f"�ݒ�NAME: {MODE_CONFIG.cafe_category_name or '���ݒ�'}\n"
-        f"�M���h�̃J�e�S���ꗗ: {', '.join(names) if names else '�擾�ł��܂���ł���'}"
+        "カテゴリが見つかりません。\n"
+        f"設定ID: {MODE_CONFIG.cafe_category_id or '未設定'} / "
+        f"設定NAME: {MODE_CONFIG.cafe_category_name or '未設定'}\n"
+        f"ギルドのカテゴリ一覧: {', '.join(names) if names else '取得できませんでした'}"
     )
 
 
@@ -394,17 +394,17 @@ class SupabaseReserveLog:
 reserve_sheet = SupabaseReserveLog()
 
 
-# --- UI �R���|�[�l���g ---
-class TimeInputModal(ui.Modal, title="? �\�񎞊Ԃ����"):
+# --- UI コンポーネント ---
+class TimeInputModal(ui.Modal, title="🕐 予約時間を入力"):
     def __init__(self, user: discord.User):
         super().__init__(timeout=300)
         self.request_user = user
         self.day = ui.TextInput(
-            label="���t(YYYY/MM/DD)",
+            label="日付(YYYY/MM/DD)",
             default=datetime.now(JST).strftime("%Y/%m/%d"),
         )
-        self.start_time = ui.TextInput(label="�J�n(HH:MM)", default="13:00")
-        self.end_time = ui.TextInput(label="�I��(HH:MM)", default="14:00")
+        self.start_time = ui.TextInput(label="開始(HH:MM)", default="13:00")
+        self.end_time = ui.TextInput(label="終了(HH:MM)", default="14:00")
         self.add_item(self.day)
         self.add_item(self.start_time)
         self.add_item(self.end_time)
@@ -417,13 +417,13 @@ class TimeInputModal(ui.Modal, title="? �\�񎞊Ԃ����"):
             end_t = parse_time(self.end_time.value)
         except ValueError:
             await interaction.followup.send(
-                "���t�܂��͎��Ԃ̌`��������������܂���", ephemeral=True
+                "日付または時間の形式が正しくありません", ephemeral=True
             )
             return
 
         if start_t >= end_t:
             await interaction.followup.send(
-                "�J�n���Ԃ��I�����Ԃ��O�ɂ��Ă�������", ephemeral=True
+                "開始時間は終了時間より前にしてください", ephemeral=True
             )
             return
 
@@ -447,7 +447,7 @@ class TimeInputModal(ui.Modal, title="? �\�񎞊Ԃ����"):
 
         if not available:
             await interaction.followup.send(
-                "�w�莞�Ԃɋ󂢂Ă���Ȃ�����܂���", ephemeral=True
+                "指定時間に空いているチャンネルがありません", ephemeral=True
             )
             return
 
@@ -459,7 +459,7 @@ class TimeInputModal(ui.Modal, title="? �\�񎞊Ԃ����"):
             end=self.end_time.value,
         )
         await interaction.followup.send(
-            f"{self.day.value} {self.start_time.value}?{self.end_time.value} �ŗ\�񂷂�Ȃ�I��ł�������",
+            f"{self.day.value} {self.start_time.value}〜{self.end_time.value} で予約するチャンネルを選んでください",
             view=view,
             ephemeral=True,
         )
@@ -472,7 +472,7 @@ class ChannelSelect(ui.Select):
             for ch in parent.channels
         ]
         super().__init__(
-            placeholder="�Ȃ�I��",
+            placeholder="チャンネルを選択",
             min_values=1,
             max_values=1,
             options=options[:25],
@@ -482,14 +482,14 @@ class ChannelSelect(ui.Select):
     async def callback(self, interaction: discord.Interaction):
         if interaction.user.id != self.parent_view.user.id:
             await interaction.response.send_message(
-                "�\��҂̂ݑ���ł��܂�", ephemeral=True
+                "予約者のみ選択できます", ephemeral=True
             )
             return
         await interaction.response.defer(ephemeral=True)
         channel_id = int(self.values[0])
         channel = discord.utils.get(self.parent_view.channels, id=channel_id)
         if not channel:
-            await interaction.followup.send("�`�����l����������܂���", ephemeral=True)
+            await interaction.followup.send("チャンネルが見つかりません", ephemeral=True)
             return
 
         row_index = await sheets_call(
@@ -519,11 +519,11 @@ class ChannelSelect(ui.Select):
         )
         await interaction.followup.send(
             content=(
-                "�\���o�^���܂����B\n"
-                f"��: {channel.name}\n"
-                f"���t: {self.parent_view.day}\n"
-                f"����: {self.parent_view.start}?{self.parent_view.end}\n"
-                "�Q���҂�ǉ����܂����H�i�C�ӁE�X�L�b�v�j"
+                "予約を登録しました。\n"
+                f"チャンネル: {channel.name}\n"
+                f"日付: {self.parent_view.day}\n"
+                f"時間: {self.parent_view.start}〜{self.parent_view.end}\n"
+                "参加者を追加しますか？（任意・スキップ）"
             ),
             view=participant_view,
             ephemeral=True,
@@ -533,7 +533,7 @@ class ChannelSelect(ui.Select):
             and participant_view.announce_channel is None
         ):
             await interaction.followup.send(
-                "�\��A�i�E���X�`�����l����������܂���ł���",
+                "予約アナウンスチャンネルが見つかりませんでした",
                 ephemeral=True,
             )
 
@@ -559,7 +559,7 @@ class ChannelSelectView(ui.View):
 class ParticipantSelect(ui.UserSelect):
     def __init__(self, parent: "ParticipantSelectView"):
         super().__init__(
-            placeholder="�Q���҂�I���i�C�Ӂj",
+            placeholder="参加者を選択（任意）",
             min_values=0,
             max_values=10,
         )
@@ -568,7 +568,7 @@ class ParticipantSelect(ui.UserSelect):
     async def callback(self, interaction: discord.Interaction):
         if interaction.user.id != self.parent_view.owner.id:
             await interaction.response.send_message(
-                "�\��҂̂ݎQ���҂�o�^�ł��܂�", ephemeral=True
+                "予約者のみ参加者を登録できます", ephemeral=True
             )
             return
         participants = [
@@ -577,7 +577,7 @@ class ParticipantSelect(ui.UserSelect):
         await sheets_call(
             sheets.update_participants, self.parent_view.row_index, participants
         )
-        names = ", ".join(member.mention for member in self.values) if self.values else "�Ȃ�"
+        names = ", ".join(member.mention for member in self.values) if self.values else "なし"
         await self.parent_view._send_announce(participants_text=names)
         await interaction.response.edit_message(view=None)
 
@@ -605,15 +605,15 @@ class ParticipantSelectView(ui.View):
         self.user_mention = user_mention
         self.add_item(ParticipantSelect(self))
 
-    @ui.button(label="�X�L�b�v", style=discord.ButtonStyle.secondary)
+    @ui.button(label="スキップ", style=discord.ButtonStyle.secondary)
     async def skip(self, interaction: discord.Interaction, _: ui.Button):
         if interaction.user.id != self.owner.id:
             await interaction.response.send_message(
-                "�\��҂̂ݑ���ł��܂�", ephemeral=True
+                "予約者のみ選択できます", ephemeral=True
             )
             return
-        await self._send_announce(participants_text="�Ȃ�")
-        await interaction.response.edit_message(content="�\�񂪊������܂���", view=None)
+        await self._send_announce(participants_text="なし")
+        await interaction.response.edit_message(content="予約が完了しました", view=None)
 
     async def _send_announce(self, participants_text: str):
         if not self.announce_channel:
@@ -626,13 +626,13 @@ class ParticipantSelectView(ui.View):
             )
             return
         embed = discord.Embed(
-            title="? �\�񂪍쐬����܂���",
-            description=f"{self.user_mention} �� {self.channel_name} ��\�񂵂܂���",
+            title="✅ 予約が作成されました",
+            description=f"{self.user_mention} が {self.channel_name} を予約しました",
             color=discord.Color.blurple(),
         )
-        embed.add_field(name="���t", value=self.day, inline=True)
-        embed.add_field(name="����", value=f"{self.start}?{self.end}", inline=True)
-        embed.add_field(name="�Q����", value=participants_text or "�Ȃ�", inline=False)
+        embed.add_field(name="日付", value=self.day, inline=True)
+        embed.add_field(name="時間", value=f"{self.start}〜{self.end}", inline=True)
+        embed.add_field(name="参加者", value=participants_text or "なし", inline=False)
         try:
             await self.announce_channel.send(embed=embed)
         except discord.HTTPException:
@@ -644,11 +644,11 @@ class CancelButtonView(ui.View):
         super().__init__(timeout=120)
         self.row_index = row_index
 
-    @ui.button(label="�L�����Z������", style=discord.ButtonStyle.danger)
+    @ui.button(label="キャンセルする", style=discord.ButtonStyle.danger)
     async def do_cancel(self, interaction: discord.Interaction, _: ui.Button):
         await sheets_call(sheets.delete_row, self.row_index)
         await interaction.response.edit_message(
-            content="�\����L�����Z�����܂���", view=None
+            content="予約をキャンセルしました", view=None
         )
 
 
@@ -657,7 +657,7 @@ class ReservationMenu(ui.View):
         super().__init__(timeout=None)
 
     @ui.button(
-        label="?? �\�񂷂�",
+        label="📅 予約する",
         style=discord.ButtonStyle.primary,
         custom_id="cafebook2:reserve",
     )
@@ -673,7 +673,7 @@ class ReservationMenu(ui.View):
                 raise
 
     @ui.button(
-        label="? �L�����Z��",
+        label="❌ キャンセル",
         style=discord.ButtonStyle.danger,
         custom_id="cafebook2:cancel",
     )
@@ -682,7 +682,7 @@ class ReservationMenu(ui.View):
             return
         await send_cancellation_embeds(interaction)
 
-# --- �R�}���h & �C�x���g ---
+# --- コマンド & イベント ---
 async def send_cancellation_embeds(interaction: discord.Interaction):
     if not interaction.response.is_done():
         await interaction.response.defer(ephemeral=True)
@@ -696,24 +696,24 @@ async def send_cancellation_embeds(interaction: discord.Interaction):
 
     if not matches:
         await interaction.followup.send(
-            "���Ȃ��̗\�񂪌�����܂���ł���", ephemeral=True
+            "あなたの予約が見つかりませんでした", ephemeral=True
         )
         return
 
     for res in matches:
-        embed = discord.Embed(title="�\����e", color=discord.Color.orange())
-        embed.add_field(name="�`�����l��", value=res["channel"], inline=True)
-        embed.add_field(name="���t", value=res["day"], inline=True)
+        embed = discord.Embed(title="予約内容", color=discord.Color.orange())
+        embed.add_field(name="チャンネル名", value=res["channel"], inline=True)
+        embed.add_field(name="日付", value=res["day"], inline=True)
         embed.add_field(
-            name="����", value=f"{res['start']}?{res['end']}", inline=True
+            name="時間", value=f"{res['start']}〜{res['end']}", inline=True
         )
         participants = res.get("participants") or "[]"
         try:
             parsed_mentions = parse_participant_mentions(participants)
-            mention_text = ", ".join(parsed_mentions) if parsed_mentions else "�Ȃ�"
+            mention_text = ", ".join(parsed_mentions) if parsed_mentions else "なし"
         except json.JSONDecodeError:
-            mention_text = "�Ȃ�"
-        embed.add_field(name="�Q����", value=mention_text, inline=False)
+            mention_text = "なし"
+        embed.add_field(name="参加者", value=mention_text, inline=False)
         view = CancelButtonView(res["row_index"])
         await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
@@ -764,11 +764,11 @@ async def show_menu(interaction: discord.Interaction):
 
 
 @_maybe_guild_scope
-@bot.tree.command(name="cafebook_panel", description="(�݊�) ���R�}���h �\�񃁃j���[��\��")
+@bot.tree.command(name="cafebook_panel", description="(互換) 旧コマンド 予約メニューを表示")
 async def cafebook_panel(interaction: discord.Interaction):
     view = ReservationMenu()
     try:
-        await interaction.response.send_message("�����I��ł�������", view=view)
+        await interaction.response.send_message("アクションを選択してください", view=view)
     except discord.NotFound:
         return
 
@@ -786,7 +786,7 @@ async def _fetch_channel(channel_id: int) -> Optional[discord.abc.GuildChannel]:
 
 
 @_maybe_guild_scope
-@bot.tree.command(name="cafebook_status", description="���݂̃��[�h�Ɛݒ��\��")
+@bot.tree.command(name="cafebook_status", description="現在のモードと設定を表示")
 async def cafebook_status(interaction: discord.Interaction):
     cfg = MODE_CONFIG
     guild = bot.get_guild(cfg.guild_id) if cfg.guild_id else None
@@ -796,17 +796,17 @@ async def cafebook_status(interaction: discord.Interaction):
 
     lines = [
         f"RUN_MODE: {RUN_MODE}",
-        f"Guild ID: {cfg.guild_id or '���ݒ�'} / Guild Name: {guild.name if guild else '�s��'}",
+        f"Guild ID: {cfg.guild_id or '未設定'} / Guild Name: {guild.name if guild else '不明'}",
         "Category ID: "
-        f"{cfg.cafe_category_id or '���ݒ�'} / "
-        f"Category Name: {cfg.cafe_category_name or '���ݒ�'} / "
-        f"Resolved: {category.name if category else '�s��'}",
+        f"{cfg.cafe_category_id or '未設定'} / "
+        f"Category Name: {cfg.cafe_category_name or '未設定'} / "
+        f"Resolved: {category.name if category else '不明'}",
         "Announce Channel ID: "
-        f"{cfg.reservation_announce_channel_id or '���ݒ�'} / "
-        f"Name: {announce_channel.name if announce_channel else '�s��'}",
+        f"{cfg.reservation_announce_channel_id or '未設定'} / "
+        f"Name: {announce_channel.name if announce_channel else '不明'}",
         "Reminder Channel ID: "
-        f"{cfg.reminder_channel_id or '���ݒ�'} / "
-        f"Name: {reminder_channel.name if reminder_channel else '�s��'}",
+        f"{cfg.reminder_channel_id or '未設定'} / "
+        f"Name: {reminder_channel.name if reminder_channel else '不明'}",
         f"Reminder Minutes: {cfg.reminder_minutes_before}",
     ]
     await interaction.response.send_message("\n".join(lines), ephemeral=True)
@@ -816,13 +816,13 @@ async def cafebook_status(interaction: discord.Interaction):
 async def on_message(message: discord.Message):
     if message.author.bot:
         return
-    if message.content.strip() == "�J�t�F�\��":
+    if message.content.strip() == "カフェ予約":
         view = ReservationMenu()
-        await message.channel.send("�����I��ł�������", view=view)
+        await message.channel.send("アクションを選択してください", view=view)
         return
     await bot.process_commands(message)
 
-# --- ���}�C���_�[ ---
+# --- リマインダー ---
 
 def parse_participant_mentions(raw: str) -> List[str]:
     try:
@@ -919,12 +919,12 @@ async def reminder_loop():
             if mention_text:
                 message = (
                     f"{prefix}{mention_text}\n"
-                    f"�J�n{cfg.reminder_minutes_before}���O�ł��I"
+                    f"開始{cfg.reminder_minutes_before}分前です！"
                     f" {day} {row[3]}?{row[4]} / {row[1]}"
                 )
             else:
                 message = (
-                    f"{prefix}�J�n{cfg.reminder_minutes_before}���O�ł��I"
+                    f"{prefix}開始{cfg.reminder_minutes_before}分前です！"
                     f" {day} {row[3]}?{row[4]} / {row[1]}"
                 )
             try:
