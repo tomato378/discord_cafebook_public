@@ -13,8 +13,7 @@ from aiohttp import web
 from discord import app_commands, ui
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
-from google.oauth2 import service_account
-from googleapiclient.discovery import build
+from supabase import Client, create_client
 
 # --- ���ϐ� ---
 _env_path = Path(__file__).resolve().parents[1] / ".env"
@@ -68,10 +67,8 @@ RUN_MODE = _parse_run_mode(sys.argv[1:])
 IS_TEST_MODE = RUN_MODE == "test"
 
 TOKEN = os.getenv("DISCORD_TOKEN")
-SPREADSHEET_ID = os.getenv("GOOGLE_SHEET_ID")
-SHEET_NAME = os.getenv("GOOGLE_SHEET_NAME", "sheet1")
-RESERVE_SHEET_NAME = os.getenv("RESERVE_SHEET_NAME", "reserve")
-CREDENTIALS_PATH = os.getenv("GOOGLE_CREDENTIALS_PATH", "credentials.json")
+SUPABASE_URL = os.getenv("SUPABASE_URL", "")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
 BOT_TEST_USER_ID = _read_int("BOT_TEST_USER_ID")
 
 
@@ -179,13 +176,12 @@ def _category_hint(guild: Optional[discord.Guild]) -> str:
 
 
 def ensure_token() -> None:
-    if not TOKEN or not SPREADSHEET_ID:
-        raise RuntimeError("DISCORD_TOKEN �� GOOGLE_SHEET_ID ��ݒ肵�Ă�������")
+    if not TOKEN:
+        raise RuntimeError("DISCORD_TOKEN を設定してください")
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        raise RuntimeError("SUPABASE_URL と SUPABASE_KEY を設定してください")
     if MODE_CONFIG.cafe_category_id <= 0 and not MODE_CONFIG.cafe_category_name:
-        raise RuntimeError(
-            "CAFE_CATEGORY_ID/NAME ��ݒ肵�Ă������� (PROD_/TEST_ �̂����ꂩ)"
-        )
-    load_credentials()
+        raise RuntimeError("CAFE_CATEGORY_ID/NAME を設定してください (PROD_/TEST_ のどちらか)")
 
 
 async def resolve_cafe_category(
@@ -236,36 +232,6 @@ def is_past_reservation(day: str, end: str) -> bool:
     return end_dt < datetime.now(JST)
 
 
-def load_credentials():
-    json_blob = os.getenv("GOOGLE_CREDENTIALS_JSON")
-    if json_blob:
-        info = json.loads(json_blob)
-        return service_account.Credentials.from_service_account_info(
-            info, scopes=["https://www.googleapis.com/auth/spreadsheets"]
-        )
-
-    explicit_path = os.getenv("GOOGLE_CREDENTIALS_PATH")
-    if explicit_path and os.path.exists(explicit_path):
-        return service_account.Credentials.from_service_account_file(
-            explicit_path,
-            scopes=["https://www.googleapis.com/auth/spreadsheets"],
-        )
-
-    secret_file_path = "/etc/secrets/credentials.json"
-    if os.path.exists(secret_file_path):
-        return service_account.Credentials.from_service_account_file(
-            secret_file_path,
-            scopes=["https://www.googleapis.com/auth/spreadsheets"],
-        )
-
-    local_path = "credentials.json"
-    if os.path.exists(local_path):
-        return service_account.Credentials.from_service_account_file(
-            local_path,
-            scopes=["https://www.googleapis.com/auth/spreadsheets"],
-        )
-
-    raise RuntimeError("Google �F�؏�񂪌�����܂���")
 
 
 async def _health_handler(request: web.Request) -> web.Response:
@@ -288,104 +254,28 @@ async def _start_health_server():
     await site.start()
     print(f"?? Health server running on 0.0.0.0:{port}")
 
-# --- Google Sheet ���� ---
-class SheetOperations:
+# --- Supabase 操作 ---
+class SupabaseOperations:
     def __init__(self) -> None:
-        self.service = None
-        self.sheet_name = SHEET_NAME
-        self.header = [
-            "�\���",
-            "�`�����l��",
-            "���t",
-            "�J�n",
-            "�I��",
-            "�\���ID",
-            "�Q����JSON",
-            "�쐬����",
-            "reminded",
-        ]
-        self.sheet_id: Optional[int] = None
-        self._header_checked = False
-
-    def _get_api(self):
-        if not self.service:
-            creds = load_credentials()
-            self.service = build("sheets", "v4", credentials=creds).spreadsheets()
-        return self.service
-
-    def _ensure_sheet_id(self) -> int:
-        if self.sheet_id is not None:
-            return self.sheet_id
-        api = self._get_api()
-        info = api.get(spreadsheetId=SPREADSHEET_ID).execute()
-        for sheet in info.get("sheets", []):
-            props = sheet.get("properties", {})
-            if props.get("title") == self.sheet_name:
-                self.sheet_id = props.get("sheetId", 0)
-                return self.sheet_id
-        self.sheet_id = (
-            info.get("sheets", [{}])[0].get("properties", {}).get("sheetId", 0)
-        )
-        return self.sheet_id
-
-    def ensure_header_row(self) -> None:
-        if self._header_checked:
-            return
-        api = self._get_api()
-        result = api.values().get(
-            spreadsheetId=SPREADSHEET_ID, range=f"{self.sheet_name}!A1:I1"
-        ).execute()
-        values = result.get("values", [])
-        if not values:
-            api.values().update(
-                spreadsheetId=SPREADSHEET_ID,
-                range=f"{self.sheet_name}!A1:I1",
-                valueInputOption="RAW",
-                body={"values": [self.header]},
-            ).execute()
-            self._header_checked = True
-            return
-        if values[0] != self.header:
-            sheet_id = self._ensure_sheet_id()
-            api.batchUpdate(
-                spreadsheetId=SPREADSHEET_ID,
-                body={
-                    "requests": [
-                        {
-                            "insertDimension": {
-                                "range": {
-                                    "sheetId": sheet_id,
-                                    "dimension": "ROWS",
-                                    "startIndex": 0,
-                                    "endIndex": 1,
-                                },
-                                "inheritFromBefore": False,
-                            }
-                        }
-                    ]
-                },
-            ).execute()
-            api.values().update(
-                spreadsheetId=SPREADSHEET_ID,
-                range=f"{self.sheet_name}!A1:I1",
-                valueInputOption="RAW",
-                body={"values": [self.header]},
-            ).execute()
-        self._header_checked = True
+        self.client: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
     def fetch_rows(self) -> List[Tuple[int, List[str]]]:
-        self.ensure_header_row()
-        api = self._get_api()
-        result = api.values().get(
-            spreadsheetId=SPREADSHEET_ID, range=f"{self.sheet_name}!A:I"
-        ).execute()
-        rows = result.get("values", [])
+        response = self.client.table("reservations").select("*").order("id").execute()
         data: List[Tuple[int, List[str]]] = []
-        for idx, row in enumerate(rows, start=1):
-            if idx == 1:
-                continue
-            padded = row + [""] * max(0, 9 - len(row))
-            data.append((idx, padded[:9]))
+        for record in response.data:
+            participants_raw = record.get("participants") or []
+            row = [
+                record.get("user_mention", ""),
+                record.get("channel_name", ""),
+                record.get("day", ""),
+                record.get("start_time", ""),
+                record.get("end_time", ""),
+                str(record.get("user_id", "")),
+                json.dumps(participants_raw, ensure_ascii=False),
+                str(record.get("created_at", "")),
+                "TRUE" if record.get("reminded") else "FALSE",
+            ]
+            data.append((record["id"], row))
         return data
 
     def append_row(
@@ -397,80 +287,36 @@ class SheetOperations:
         end: str,
         user_id: int,
     ) -> int:
-        self.ensure_header_row()
-        api = self._get_api()
-        values = [
-            user_mention,
-            channel_name,
-            day,
-            start,
-            end,
-            str(user_id),
-            "[]",
-            datetime.now(JST).strftime("%Y/%m/%d %H:%M:%S"),
-            "FALSE",
-        ]
         response = (
-            api.values()
-            .append(
-                spreadsheetId=SPREADSHEET_ID,
-                range=f"{self.sheet_name}!A:H",
-                valueInputOption="USER_ENTERED",
-                body={"values": [values]},
-            )
+            self.client.table("reservations")
+            .insert({
+                "user_mention": user_mention,
+                "channel_name": channel_name,
+                "day": day,
+                "start_time": start,
+                "end_time": end,
+                "user_id": user_id,
+                "participants": [],
+                "reminded": False,
+            })
             .execute()
         )
-        updated = response.get("updates", {})
-        updated_range = updated.get("updatedRange", "")
-        row_number = 0
-        try:
-            row_part = updated_range.split("!")[1]
-            row_number = int(row_part.split(":")[0][1:])
-        except Exception:
-            row_number = 0
-        return row_number
+        return response.data[0]["id"]
 
     def update_participants(
-        self, row_index: int, participants: Sequence[Dict[str, str]]
+        self, row_id: int, participants: Sequence[Dict[str, str]]
     ) -> None:
-        api = self._get_api()
-        payload = json.dumps(list(participants), ensure_ascii=False)
-        api.values().update(
-            spreadsheetId=SPREADSHEET_ID,
-            range=f"{self.sheet_name}!G{row_index}",
-            valueInputOption="RAW",
-            body={"values": [[payload]]},
-        ).execute()
+        self.client.table("reservations").update(
+            {"participants": list(participants)}
+        ).eq("id", row_id).execute()
 
-    def mark_reminded(self, row_index: int) -> None:
-        api = self._get_api()
-        api.values().update(
-            spreadsheetId=SPREADSHEET_ID,
-            range=f"{self.sheet_name}!I{row_index}",
-            valueInputOption="RAW",
-            body={"values": [["TRUE"]]},
-        ).execute()
+    def mark_reminded(self, row_id: int) -> None:
+        self.client.table("reservations").update(
+            {"reminded": True}
+        ).eq("id", row_id).execute()
 
-    def delete_row(self, row_index: int) -> None:
-        sheet_id = self._ensure_sheet_id()
-        api = self._get_api()
-        api.batchUpdate(
-            spreadsheetId=SPREADSHEET_ID,
-            body={
-                "requests": [
-                    {
-                        "deleteDimension": {
-                            "range": {
-                                "sheetId": sheet_id,
-                                "dimension": "ROWS",
-                                "startIndex": row_index - 1,
-                                "endIndex": row_index,
-                            }
-                        }
-                    }
-                ]
-            },
-        ).execute()
+    def delete_row(self, row_id: int) -> None:
+        self.client.table("reservations").delete().eq("id", row_id).execute()
 
     def is_slot_available(self, channel_name: str, day: str, start: str, end: str) -> bool:
         for _, row in self.fetch_rows():
@@ -502,97 +348,50 @@ class SheetOperations:
         return True
 
     def find_by_user(self, user_id: int) -> List[Dict[str, str]]:
+        response = (
+            self.client.table("reservations")
+            .select("*")
+            .eq("user_id", user_id)
+            .execute()
+        )
         results: List[Dict[str, str]] = []
-        for idx, row in self.fetch_rows():
-            if row[5] != str(user_id):
-                continue
-            results.append(
-                {
-                    "row_index": idx,
-                    "user": row[0],
-                    "channel": row[1],
-                    "day": row[2],
-                    "start": row[3],
-                    "end": row[4],
-                    "participants": row[6],
-                    "created_at": row[7],
-                }
-            )
+        for record in response.data:
+            participants_raw = record.get("participants") or []
+            results.append({
+                "row_index": record["id"],
+                "user": record.get("user_mention", ""),
+                "channel": record.get("channel_name", ""),
+                "day": record.get("day", ""),
+                "start": record.get("start_time", ""),
+                "end": record.get("end_time", ""),
+                "participants": json.dumps(participants_raw, ensure_ascii=False),
+                "created_at": str(record.get("created_at", "")),
+            })
         return results
 
 
-sheets = SheetOperations()
+sheets = SupabaseOperations()
 
 
 async def sheets_call(func, *args, **kwargs):
-    """������Google Sheets�Ăяo����ʃX���b�h�Ŏ��s����"""
+    """Supabaseへのブロッキング呼び出しを別スレッドで実行する"""
     return await asyncio.to_thread(func, *args, **kwargs)
 
-# --- Simple reserve logging (issue #1) ---
-class SimpleReserveSheet:
+# --- Simple reserve logging ---
+class SupabaseReserveLog:
     def __init__(self) -> None:
-        self.service = None
-        self.sheet_name = RESERVE_SHEET_NAME
-        self.header = ["user", "item", "time", "timestamp", "user_id"]
-        self.sheet_id: Optional[int] = None
-
-    def _get_api(self):
-        if not self.service:
-            creds = load_credentials()
-            self.service = build("sheets", "v4", credentials=creds).spreadsheets()
-        return self.service
-
-    def _ensure_sheet(self) -> int:
-        if self.sheet_id is not None:
-            return self.sheet_id
-        api = self._get_api()
-        info = api.get(spreadsheetId=SPREADSHEET_ID).execute()
-        for sheet in info.get("sheets", []):
-            props = sheet.get("properties", {})
-            if props.get("title") == self.sheet_name:
-                self.sheet_id = props.get("sheetId", 0)
-                return self.sheet_id
-        response = api.batchUpdate(
-            spreadsheetId=SPREADSHEET_ID,
-            body={"requests": [{"addSheet": {"properties": {"title": self.sheet_name}}}]},
-        ).execute()
-        replies = response.get("replies", [])
-        self.sheet_id = (
-            replies[0].get("addSheet", {}).get("properties", {}).get("sheetId", 0)
-            if replies
-            else 0
-        )
-        return self.sheet_id
-
-    def ensure_header_row(self) -> None:
-        self._ensure_sheet()
-        api = self._get_api()
-        result = api.values().get(
-            spreadsheetId=SPREADSHEET_ID, range=f"{self.sheet_name}!A1:E1"
-        ).execute()
-        values = result.get("values", [])
-        if values and values[0] == self.header:
-            return
-        api.values().update(
-            spreadsheetId=SPREADSHEET_ID,
-            range=f"{self.sheet_name}!A1:E1",
-            valueInputOption="RAW",
-            body={"values": [self.header]},
-        ).execute()
+        self.client: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
     def append_row(self, user_mention: str, item: str, time_text: str, user_id: int) -> None:
-        self.ensure_header_row()
-        api = self._get_api()
-        timestamp = datetime.now(JST).strftime("%Y/%m/%d %H:%M:%S")
-        api.values().append(
-            spreadsheetId=SPREADSHEET_ID,
-            range=f"{self.sheet_name}!A:E",
-            valueInputOption="USER_ENTERED",
-            body={"values": [[user_mention, item, time_text, timestamp, str(user_id)]]},
-        ).execute()
+        self.client.table("reserve_logs").insert({
+            "user_mention": user_mention,
+            "item": item,
+            "time_text": time_text,
+            "user_id": user_id,
+        }).execute()
 
 
-reserve_sheet = SimpleReserveSheet()
+reserve_sheet = SupabaseReserveLog()
 
 
 # --- UI �R���|�[�l���g ---
