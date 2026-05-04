@@ -13,6 +13,7 @@ from aiohttp import web
 from discord import app_commands, ui
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
+from notion_client import Client as NotionClient
 from supabase import Client, create_client
 
 # --- 変数 ---
@@ -69,6 +70,8 @@ IS_TEST_MODE = RUN_MODE == "test"
 TOKEN = os.getenv("DISCORD_TOKEN")
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
+NOTION_TOKEN = os.getenv("NOTION_TOKEN", "")
+NOTION_DATABASE_ID = os.getenv("NOTION_DATABASE_ID", "15425994cbf1467d9a8b330345643bcb")
 BOT_TEST_USER_ID = _read_int("BOT_TEST_USER_ID")
 
 
@@ -258,6 +261,66 @@ async def _start_health_server():
 class SupabaseOperations:
     def __init__(self) -> None:
         self.client: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+        self.notion_db_id = NOTION_DATABASE_ID
+        self._notion: Optional[NotionClient] = (
+            NotionClient(auth=NOTION_TOKEN) if NOTION_TOKEN and NOTION_DATABASE_ID else None
+        )
+
+    def _notion_create(
+        self,
+        row_id: int,
+        user_mention: str,
+        channel_name: str,
+        day: str,
+        start: str,
+        end: str,
+        user_id: int,
+    ) -> Optional[str]:
+        if not self._notion:
+            return None
+        try:
+            page = self._notion.pages.create(
+                parent={"database_id": self.notion_db_id},
+                properties={
+                    "予約者": {"title": [{"text": {"content": user_mention}}]},
+                    "チャンネル": {"rich_text": [{"text": {"content": channel_name}}]},
+                    "日付": {"rich_text": [{"text": {"content": day}}]},
+                    "開始": {"rich_text": [{"text": {"content": start}}]},
+                    "終了": {"rich_text": [{"text": {"content": end}}]},
+                    "DiscordユーザーID": {"rich_text": [{"text": {"content": str(user_id)}}]},
+                    "参加者": {"rich_text": [{"text": {"content": "[]"}}]},
+                    "SupabaseID": {"number": row_id},
+                    "リマインド済み": {"checkbox": False},
+                },
+            )
+            return page["id"]
+        except Exception as e:
+            print(f"Notion create error: {e}")
+            return None
+
+    def _notion_update(self, row_id: int, properties: dict) -> None:
+        if not self._notion:
+            return
+        try:
+            resp = (
+                self.client.table("reservations")
+                .select("notion_page_id")
+                .eq("id", row_id)
+                .execute()
+            )
+            notion_page_id = resp.data[0].get("notion_page_id") if resp.data else None
+            if notion_page_id:
+                self._notion.pages.update(page_id=notion_page_id, properties=properties)
+        except Exception as e:
+            print(f"Notion update error: {e}")
+
+    def _notion_archive(self, notion_page_id: str) -> None:
+        if not self._notion or not notion_page_id:
+            return
+        try:
+            self._notion.pages.update(page_id=notion_page_id, archived=True)
+        except Exception as e:
+            print(f"Notion archive error: {e}")
 
     def fetch_rows(self) -> List[Tuple[int, List[str]]]:
         response = self.client.table("reservations").select("*").order("id").execute()
@@ -301,7 +364,15 @@ class SupabaseOperations:
             })
             .execute()
         )
-        return response.data[0]["id"]
+        row_id = response.data[0]["id"]
+        notion_page_id = self._notion_create(
+            row_id, user_mention, channel_name, day, start, end, user_id
+        )
+        if notion_page_id:
+            self.client.table("reservations").update(
+                {"notion_page_id": notion_page_id}
+            ).eq("id", row_id).execute()
+        return row_id
 
     def update_participants(
         self, row_id: int, participants: Sequence[Dict[str, str]]
@@ -309,14 +380,28 @@ class SupabaseOperations:
         self.client.table("reservations").update(
             {"participants": list(participants)}
         ).eq("id", row_id).execute()
+        self._notion_update(
+            row_id,
+            {"参加者": {"rich_text": [{"text": {"content": json.dumps(list(participants), ensure_ascii=False)}}]}},
+        )
 
     def mark_reminded(self, row_id: int) -> None:
         self.client.table("reservations").update(
             {"reminded": True}
         ).eq("id", row_id).execute()
+        self._notion_update(row_id, {"リマインド済み": {"checkbox": True}})
 
     def delete_row(self, row_id: int) -> None:
+        resp = (
+            self.client.table("reservations")
+            .select("notion_page_id")
+            .eq("id", row_id)
+            .execute()
+        )
+        notion_page_id = resp.data[0].get("notion_page_id") if resp.data else None
         self.client.table("reservations").delete().eq("id", row_id).execute()
+        if notion_page_id:
+            self._notion_archive(notion_page_id)
 
     def is_slot_available(self, channel_name: str, day: str, start: str, end: str) -> bool:
         for _, row in self.fetch_rows():
